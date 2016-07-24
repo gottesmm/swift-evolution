@@ -13,7 +13,7 @@ Swift-evolution thread: [[Proposal] Move public AutoreleasingUnsafeMutablePointe
 
 ## Motivation
 
-A core principle of StdlibCore development is that StdlibCore should be as platform and os independent as possible. This implies attempting to eliminating code that is conditionally compiled depending on the platform and os when appropriate and possible. The reason why eliminating such a code is a general "good" is:
+A core principle of StdlibCore development is that StdlibCore should be as platform and os independent as possible. This implies attempting to eliminating code that is conditionally compiled depending on the platform and os when appropriate and possible. The reason why eliminating such a code is a general "good" (and thus motivating) is:
 
 1. Conditionally compiled code can be difficult to reason about since often times large sections of code are conditionally compiled and the actual \#if/\#endif markers are only on the boundary. This especially comes into play when searching code for specific text.
 
