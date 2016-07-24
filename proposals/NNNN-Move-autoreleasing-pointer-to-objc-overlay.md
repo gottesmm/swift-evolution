@@ -17,35 +17,15 @@ A core principle of StdlibCore development is that StdlibCore should be as platf
 
 1. Conditionally compiled code can be difficult to reason about since often times large sections of code are conditionally compiled and the actual \#if/\#endif markers are only on the boundary. This especially comes into play when searching code for specific text.
 
-2. Working on StdlibCore for any platform P where the relevant code is conditionally compiled out if the target platform is not a platform Q becomes more difficult since:
+2. Given two distinct platforms P and Q, attempting to make changes to a StdlibCore file F for P in the presense of code conditionally compiled only on platform Q results in the following difficulties:
 
-   a. Significant chucks of the file are irrelevant to P causing a spaghetti code like effect.
+   a. Significant blocks of code in F are irrelevant to P causing a spaghetti code like effect.
 
    b. When working on P, it becomes very easy to by mistake break Q via conflicting names, methods.
 
-3. Additional unnecessary work is put onto the parser since all conditionally compiled code in Swift must still be parsed. As a code base increases in size this can become a significant impact on compile time. As an example of this consider the effort put into the vectorization of comment stripping in Clang.
+3. API deltas are created in between StdlibCore on different platforms. Reducing the size of such deltas eases reasoning about the overall API of StdlibCore by eliminating special cases that must be remembered by contributors.
 
-Currently a large part of such conditionally compiled code is
-
-Eliminating conditionally compiled code moves One technique used to do this is to sink the conditionally compiled code into a conditionally compiled overlay and use
-extensions to provide the functionality of the formerly conditionally compiled
-code. Eliminating conditionally compiled code and centralizing such code in an
-overlay:
-
-1. Shrinks the source code size of StdlibCore making it easier to reason about.
-2. Shrinks The API delta in between StdlibCore on different platforms.
-3. Eliminates visual noise from StdlibCore when reasoning about platforms that
-   do not support Objective C.
-4. Moves the conditionally compiled code to a centralized overlay. Thus instead
-   of having to search in StdlibCore for conditionally compiled code and reason
-   if the code is enabled or not, one can just go straight to the overlay where
-   all of the code is static.
-5. Shrinks the API delta in between StdlibCore on different platforms
-
-Today there is a large amount of conditionally compiled code in StdlibCore that
-ideally should be in the Objective C overlay from a code organization
-perspective. Cleaning up this code would eliminate spaghetti code from
-StdlibCore and 
+4. Since all conditionally compiled code in Swift is parsed, additional unnecessary work must be done by the Swift Frontend and the OS. While this may seem uninteresting, consider that significant speedups were seen in Clang's compile time by the vectorization of comment stripping. In this case we are not just ignoring blocks of code, we are actually parsing the code and then throwing it away. Especially as StdlibCore gets larger, this will become a more significant problem.
 
 ## Proposed solution
 
