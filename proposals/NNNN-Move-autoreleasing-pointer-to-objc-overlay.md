@@ -1,6 +1,6 @@
 # Move AutoreleasingUnsafeMutablePointer from StdlibCore to Objective C overlay
 
-* Proposal: [SE-NNNN](XXXX-Move-autoreleasing-pointer-to-objc-overlay.md)
+* Proposal: [SE-NNNN](NNNN-Move-autoreleasing-pointer-to-objc-overlay.md)
 * Author: [gottesmm](https://github.com/gottesmm)
 * Status: **Awaiting review**
 * Review manager: TBD
