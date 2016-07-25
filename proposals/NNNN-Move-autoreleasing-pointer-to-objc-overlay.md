@@ -25,13 +25,13 @@ A core principle of StdlibCore development is that StdlibCore should be as platf
 
 3. API deltas are created in between StdlibCore on different platforms. Reducing the size of such deltas eases reasoning about the overall API of StdlibCore by eliminating special cases that must be remembered by contributors.
 
-4. Since all conditionally compiled code in Swift is parsed, additional unnecessary work must be done by the Swift Frontend and the OS. While this may seem uninteresting, consider that significant speedups were seen in Clang's compile time by the vectorization of comment stripping. In this case we are not just ignoring blocks of code, we are actually parsing the code and then throwing it away. Especially as StdlibCore gets larger, this will become a more significant problem.
+4. Since all conditionally compiled code in Swift is parsed, additional unnecessary work must be done by the Swift Frontend and the OS in terms of reading code from disk. While this may seem uninteresting, consider that significant speedups were seen in Clang's compile time by the vectorization of comment stripping. In this case we are not just ignoring blocks of code, we are actually parsing the code and then throwing it away. Especially as StdlibCore gets larger, this will become a more significant problem.
+
+This is 
 
 ## Proposed solution
 
-Describe your solution to the problem. Provide examples and describe
-how they work. Show how your solution is better than current
-workarounds: is it cleaner, safer, or more efficient?
+
 
 ## Detailed design
 
