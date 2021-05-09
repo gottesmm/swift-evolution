@@ -8,13 +8,14 @@
 ## Introduction
 
 Define a homogenous tuple of type `T` as a tuple that only contains elements of
-type `T`, e.x.: `(T, T, ..., T)`. These types of tuples are used by System and
-stdlib programmers to layout storage for a typed fixed size buffer. Not much
-language support has been provided to make working with these tuples
-easy/expressive and certain capabilities are impossible to implement without
-resorting to reinterpret casting/language accidents. This proposal is an attempt
-to add that language support so that it is easier to: declare such tuples,
-initialize such tuples, and treat these tuples as a collection.
+type `T`, e.x.: `(T, T, ..., T)`. These types of tuples are used by system
+programmers in Swift to express a fixed size buffer of type `T` with a
+guaranteed layout. Not much language support has been provided to make working
+with these tuples easy/expressive and certain capabilities are impossible to
+implement without resorting to reinterpret casting/language accidents. This
+proposal is an attempt to add that missing language support so that it is easier
+to: declare such tuples, initialize such tuples, treat these tuples as a
+collection, and work with these tuples when importing from C programs.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
@@ -29,9 +30,9 @@ Today in Swift, system programmers use homogenous tuples to represent a fixed
 buffer of bytes of a certain type. As an example of this, consider the following
 example from the swift standard library,
 
-```
-Taken from:
-https://github.com/apple/swift/blob/833a453c8ad6e9982e849229d6f91532717cd354/stdlib/public/core/SmallString.swift#L33
+```swift
+// Taken from:
+// https://github.com/apple/swift/blob/833a453c8ad6e9982e849229d6f91532717cd354/stdlib/public/core/SmallString.swift#L33
 
 @frozen @usableFromInline
 internal struct _SmallString {
@@ -40,12 +41,13 @@ internal struct _SmallString {
 }
 ```
 
-by declaring the state of `_SmallString` in this manner, we are able to
-guarantee that `_SmallString` when laid out in memory is exactly 128 bits. We
-can define initializers based off of the tuple representation as well as access
-the bottom/lower half of the bits using tuple syntax, e.x.:
+By declaring `_storage` as a frozen homogenous tuple of type `UInt64`, we are
+able to guarantee that `_SmallString` when laid out in memory is exactly 128
+bits and can be treated as layout compatible with other 128 bit values. We can
+define initializers based off of the tuple representation as well as access the
+bottom/lower half of the bits using tuple syntax, e.x.:
 
-```
+```swift
 extension _SmallString {
   @inlinable @inline(__always)
   internal init(rawUnchecked bits: RawBitPattern) {
@@ -67,11 +69,12 @@ extension _SmallString {
 ```
 
 Sadly, this type of model doesn't scale well as one can see due to the method in
-which one must define accessors to access the top/bottom storage in a nice
-way. Lets naively extend this model to represent a SmallArray of 128 pointers in
-Swift (allowing for null pointers):
+which one must define accessors to access the top/bottom storage without needing
+to index into the tuple using tuple indices. Lets naively extend this model to
+represent a SmallArray of 128 nullable pointers used to model a cache of values
+in a runtime data structure:
 
-```
+```swift
 @frozen @usableFromInline
 struct _SmallPointerArray128<T> {
   @usableFromInline
@@ -84,19 +87,23 @@ struct _SmallPointerArray128<T> {
 Clearly, even though `_storage` represents at a binary level 128 pointers, we
 can not initialize it in a nice way without a source generator,
 
-```
+```swift
 struct _SmallPointerArray128<T> {
   @usableFromInline
   internal init() {
     _storage = (nil, nil, ..., /* nil 125 times */, nil)
+  }
+  @usableFromInline
+  internal init(sentinelValue: UnsafeMutablePointer<T>) {
+    _storage = (sentinelValue, sentinelValue, ..., /* sentinelValue 125 times */, sentinelValue)
   }
 }
 ```
 
 or have a brief subscript implementation:
 
-```
-/* NOTE to self: show codegen here */
+```swift
+/* MG: NOTE to self: show codegen here */
 extension SmallPointerArray128<T> {
   subscript(index: Int) -> T {
     switch index {
@@ -117,7 +124,7 @@ extension SmallPointerArray128<T> {
 and can only iterate over the storage using indices via subscript rather than as
 a true first class for loop,
 
-```
+```swift
 for index in 0..<128 {
   let t = smallArray[index]
   ...
@@ -132,7 +139,7 @@ array.
 These issues also show up when importing code from C since fixed size arrays are
 imported as tuples from C. As an example, consider the following C code:
 
-```
+```swift
 float globalDataBuffer[1024];
 struct MyStruct {
     int dataBuffer[128];
@@ -141,7 +148,7 @@ struct MyStruct {
 
 These will be imported into Swift as:
 
-```
+```swift
 var globalDataBuffer: (Float, Float, ..., /* 1021 Floats */, Float)
 struct MyStruct {
   var dataBuffer: (Int, Int, ..., /* 125 Ints */, Int)
@@ -159,21 +166,21 @@ over the tuple.
 In order to make the life easier for System Programmers, we attack this lack of
 expressivity in the following ways:
 
-1. We propose that we introduce a new sugar syntax for a "homogenous tuple span"
+1. We propose a new sugar syntax for a "homogenous tuple span"
    element. This would be extending the grammar of tuple elements in Swift and
    would let one write a tuple element that expands out to a homogenous list of
    elements of the same type as follows:
+   ```swift
+     (5 x Int)
    ```
-     (Float, 5 x Int, String, 2 x AnyObject)
-   ```
-   which would expand out to the following type:
-   ```
-     (Float, Int, Int, Int, Int, Int, String, AnyObject, AnyObject)
+   which would expand out (that is de-sugared) to the following type in the parser:
+   ```swift
+     (Int, Int, Int, Int, Int)
    ```
    This directly attacks and eliminates the declaration issue around declaring
    large tuples and will enable us to import C types with brevity allowing us to
    import the earlier mentioned C code as:
-   ```
+   ```swift
    var globalDataBuffer: (1024 x Float)
    struct MyStruct {
      var dataBuffer: (128 x Int)
@@ -181,31 +188,47 @@ expressivity in the following ways:
    ```
    Any tuple that consists of a single homogenous tuple span is then defined as
    a _pure homogenous tuple_.
+   
+   As an additional bonus a homogenous tuple span element can be mix/matched
+   with other elements to create more complex layout compatible data structures,
+   e.x.:
+   ```swift
+     (Float, 5 x Int, String, 2 x AnyObject)
+     // --> expands to
+     (Float, Int, Int, Int, Int, Int, String, AnyObject, AnyObject)
+   ```
+   This is not integral to the proposal and if necessary can be sliced off and
+   we can allow only for tuples to only have a single homogenous tuple element.
 
-2. We propose adding a series of builtin methods that are ergonomic,
-   non-collection methods on pure homogenous tuples one to write code against a
-   tuple of arbitrary size. Specifically:
+2. We propose adding a series of builtin inits for homogenous tuples to make it
+   easier to initialize homogenous tuples. Specifically:
 
-   * A repeated initializer: This will allow for users to easily initialize a
+   * `init(repeating: repeatedValue: Element)`: This will allow for users to easily initialize a
      large tuple all with the same value:
-     ```
-     init(repeating repeatedValue: Element, count: Int)
+     ```swift
+     init(repeating repeatedValue: Element)
 
      let x = (128 x Int)(repeating: 0)
      ```
-   * An unsafe uninitialized initializer:
-     ```
-     init(initializingWith initializer: (inout UnsafeMutableBufferPointer<Element>) throws -> Void) rethrows
-     ```
+     NOTE: Since the actual number of elements in the homogenous tuple is fixed,
+     we do not need to pass in the count.
+
+   * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>) throws -> Void) rethrows`:
      This method allows for one to initialize all elements of a tuple with
      pre-known values avoiding the need to first zero initialize such a tuple:
-     ```
+
+     ```swift
      // Fill tuple with integral data.
      let x = (1024 x Int) { x: UnsafeMutableBufferPointer<Int> in
        for i in 0..<1024 { x[i] = i }
      }
      // Or more succintly:
      let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
+     // memmove data from a data buffer into a tuple.
+     let x = (1024 x Int) { x: UnsafeMutableBufferPointer<Int> in
+       // TODO: Fix syntax
+       memcpy(other, x, x.size)
+     }
      ```
 
 3. We propose adding a builtin collection conformance for pure homogenous tuples
