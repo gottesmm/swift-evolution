@@ -31,14 +31,14 @@ buffer of bytes of a certain type. As an example of this, consider the following
 example from the swift standard library,
 
 ```swift
-// Taken from:
-// https://github.com/apple/swift/blob/833a453c8ad6e9982e849229d6f91532717cd354/stdlib/public/core/SmallString.swift#L33
-
 @frozen @usableFromInline
 internal struct _SmallString {
   @usableFromInline
   internal var _storage: (UInt64, UInt64)
 }
+
+// Taken from:
+// https://github.com/apple/swift/blob/833a453c8ad6e9982e849229d6f91532717cd354/stdlib/public/core/SmallString.swift#L33
 ```
 
 By declaring `_storage` as a frozen homogenous tuple of type `UInt64`, we are
