@@ -71,16 +71,16 @@ extension _SmallString {
 Sadly, this type of model doesn't scale well as one can see due to the method in
 which one must define accessors to access the top/bottom storage without needing
 to index into the tuple using tuple indices. Lets naively extend this model to
-represent a SmallArray of 128 nullable pointers used to model a cache of values
-in a runtime data structure:
+represent a SmallArray of 128 pointers used to model a cache of values in a
+low level runtime data structure:
 
 ```swift
 @frozen @usableFromInline
 struct _SmallPointerArray128<T> {
   @usableFromInline
-  internal var _storage: (UnsafeMutablePointer<T>?, UnsafeMutablePointer<T>?, UnsafeMutablePointer<T>?,
+  internal var _storage: (UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>,
                           /* 122 more pointers */
-                          UnsafeMutablePointer<T>?, UnsafeMutablePointer<T>?, UnsafeMutablePointer<T>?)
+                          UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>)
 }
 ```
 
