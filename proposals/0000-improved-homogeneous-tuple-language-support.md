@@ -139,7 +139,7 @@ array.
 These issues also show up when importing code from C since fixed size arrays are
 imported as tuples from C. As an example, consider the following C code:
 
-```swift
+```c
 float globalDataBuffer[1024];
 struct MyStruct {
     int dataBuffer[128];
