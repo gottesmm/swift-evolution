@@ -206,8 +206,6 @@ expressivity in the following ways:
    * `init(repeating: repeatedValue: Element)`: This will allow for users to easily initialize a
      large tuple all with the same value:
      ```swift
-     init(repeating repeatedValue: Element)
-
      let x = (128 x Int)(repeating: 0)
      ```
      NOTE: Since the actual number of elements in the homogenous tuple is fixed,
@@ -224,10 +222,14 @@ expressivity in the following ways:
      }
      // Or more succintly:
      let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
-     // memmove data from a data buffer into a tuple.
-     let x = (1024 x Int) { x: UnsafeMutableBufferPointer<Int> in
-       // TODO: Fix syntax
-       memcpy(other, x, x.size)
+
+     // memcpy data from a data buffer into a tuple after being called via a callback from C.
+     var _cache: (1024 x Int) = ...
+     func callBackForC(_ src: UnsafeMutableBufferPointer<Int>) {
+       precondition(src.size == 1024)
+       _cache = (1024 x Int) { dst: UnsafeMutableBufferPointer<Int> in
+         memcpy(dst.baseAddress!, src.baseAddress!, src.size * MemoryLayout<Int>.stride)
+       }
      }
      ```
 
