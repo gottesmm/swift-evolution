@@ -191,6 +191,15 @@ func myF() {
 }
 ```
 
+To work around this, we must unsafely use memory binding APIs to safely type pun
+our pointer (taking advantage of layout compatibility):
+
+```swift
+  withUnsafeBytes(of: &globalDataBuffer) { (buff: UnsafeRawBufferPointer) in
+    getValue(buff.baseAddress!.assumingMemoryBound(to: Float.self))
+  }
+```
+
 beyond being hard to read (going off the page), since such a tuple does not have
 a collection conformance, one can not iterate over it in a naive way and since
 one cannot get the size of a tuple from the underlying type, one would need to
