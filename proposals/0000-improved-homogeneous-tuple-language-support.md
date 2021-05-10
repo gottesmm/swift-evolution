@@ -103,6 +103,8 @@ that obey `MyProtocol`,
 ```swift
 @frozen @usableFromInline
 struct PointerCache<T : MyProtocol> {
+  /// 128 pointers that we use to cache the first pointers that are passed
+  /// to our API.
   @usableFromInline
   internal var _storage: (UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>,
                           /* 122 more pointers */
