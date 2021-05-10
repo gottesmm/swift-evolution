@@ -7,17 +7,19 @@
 
 ## Introduction
 
-Define a homogenous tuple of type `T` as a tuple that only contains elements of
-type `T`, e.x.: `(T, T, ..., T)`. These types of tuples are used by system
-programmers in Swift to express a fixed size buffer of type `T` with a
+Define a pure homogenous tuple of type `T` as a tuple that only contains
+elements of type `T`, e.x.: `(T, T, ..., T)`. These types of tuples are used by
+system programmers in Swift to express a fixed size buffer of type `T` with a
 guaranteed layout. Not much language support has been provided to make working
 with tuple typed storage easy/expressive. This proposal is an attempt to add
 that missing language support:
 
-1. Sugar for declaring tuples.
+1. Sugar for declaring large homogenous tuples.
 2. Helper methods for initializing such tuples.
-3. A `[Mutable]Collection` conformance to enable usage as a collection and accessing as contiguous storage.
-4. A more brief description when importing from C fixed size buffers as tuples.
+3. Add a new SILGen ArgumentToPointer conversion that eliminates unneeded unsafe memory binding API usage.
+4. A `[Mutable]Collection` conformance to enable usage as a collection and accessing as contiguous storage.
+5. Smaller, more brief description when importing from C fixed size buffers as tuples.
+6. Allow for C imported C variables to compose with C APIs in a natural way.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
