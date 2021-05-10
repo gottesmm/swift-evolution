@@ -151,7 +151,9 @@ extension PointerCache<T> {
 
 In sum, the model doesn't scale well since we can not succintly describe a tuple
 of N elements without writing out the entire tuple and we can not use a tuple
-like a collection without writing a huge unwieldy switch function.
+like a collection without writing a large unwieldy switch function that may not
+optimize well without compiler heroics (consider an optimization that
+specifically looked for this pattern and converted it to a jump table).
 
 These issues also show up when importing code from C since fixed size arrays are
 imported as tuples from C. As an example, consider the following C code:
@@ -185,6 +187,7 @@ void myF() {
 ```
 
 In contrast in Swift, we immediately run into type system problems:
+
 ```swift
 func myF() {
   useGlobalDataBuffer(&globalDataBuffer) // Error! Cannot convert value of type 'UnsafeMutablePointer<(Float, /* Float 1022 times */, Float)>' to expected argument type 'UnsafeMutablePointer<Float>'
@@ -200,11 +203,13 @@ our pointer (taking advantage of layout compatibility):
   }
 ```
 
-beyond being hard to read (going off the page), since such a tuple does not have
-a collection conformance, one can not iterate over it in a naive way and since
-one cannot get the size of a tuple from the underlying type, one would need to
-hard code the size and write accessors like we did above to be able to iterate
-over the tuple.
+bloating what should be a simple/straight forward operation (passing the address
+of a C variable to a C function).
+
+Additionally, what if we want to iterate over one of these imported C arrays? If
+one wishes to do so in a nice manner, one must define a subscript operator that
+uses pattern matching (as the author did above) for the imported C array. This
+can lead to bugs if the subscript's pattern matching isn't updated.
 
 ## Proposed solution
 
@@ -212,9 +217,7 @@ In order to make the life easier for System Programmers, we attack this lack of
 expressivity in the following ways:
 
 1. We propose a new sugar syntax for a "homogenous tuple span"
-   element. This would be extending the grammar of tuple elements in Swift and
-   would let one write a tuple element that expands out to a homogenous list of
-   elements of the same type as follows:
+   element. The grammar of tuple elements in Swift would be extended as follows:
    ```swift
      (5 x Int)
    ```
@@ -231,11 +234,9 @@ expressivity in the following ways:
      var dataBuffer: (128 x Int)
    }
    ```
-   Any tuple that consists of a single homogenous tuple span is then defined as
+   Define any tuple that consists of a single homogenous tuple span as
    a _pure homogenous tuple_.
 
-   This syntax will be propagated as well to the clang importer to ensure that when it imports C data structures 
-   
    As an additional bonus a homogenous tuple span element can be mix/matched
    with other elements to create more complex layout compatible data structures,
    e.x.:
@@ -244,7 +245,7 @@ expressivity in the following ways:
      // --> expands to
      (Float, Int, Int, Int, Int, Int, String, AnyObject, AnyObject)
    ```
-   This is not integral to the proposal and if necessary can be sliced off and
+   This capability is not integral to the proposal and if necessary can be sliced off and
    we can allow only for tuples to only have a single homogenous tuple element.
 
 2. We propose adding a series of pre-defined builtin initializers for homogenous
@@ -280,24 +281,20 @@ expressivity in the following ways:
        }
      }
      ```
-   With these 
 
-3. We propose adding a builtin collection conformance for pure homogenous tuples
-   building upon the work done in `SE-TUPLE_COMPARABLE_HASHABLE`. This will then
-   allow for full expressivity of the tuple:
+3. We propose implementing in SILGen a special form of argument to pointer
+   conversion for homogenous tuples that causes the tuple to be converted to
+   `Unsafe[Mutable]Pointer<(T, ..., T)>` to `UnsafeMutablePointer<T>`. This
+   change is layout compatible with tuple layout.
 
-   * Iteration.
-   * Access To As Raw Bytes
-   * Count
-   * Algorithms
+4. We propose adding a builtin Collection conformance for pure homogenous tuples
+   building upon the work done in `SE-TUPLE_COMPARABLE_HASHABLE`, allowing for
+   users to:
 
-   Show how one can not use these things without the collection conformance and
-   show how they improve the world and makes it cleaner, safer, more efficient t
-
-
-This will thenall Describe your solution to the problem. Provide examples and
-describe how they work. Show how your solution is better than current
-workarounds: is it cleaner, safer, or more efficient?
+   1. Iterate over the tuple.
+   2. Get the count of the tuple in a programatic matter.
+   3. Use standard algorithms like map, reduce, and filter.
+   4. Apply the full set of Swift's algorithms to the type.
 
 ## Detailed design
 
@@ -368,6 +365,8 @@ The main changes to the Swift language itself come in a few areas:
 * Homogenous Tuple Types and extra methods
 
 * Homogenous Tuple Types and collection conformance.
+
+// <---- END
 
 Describe the design of the solution in detail. If it involves new
 syntax in the language, show the additions and changes to the Swift
