@@ -15,11 +15,12 @@ with tuple typed storage easy/expressive. This proposal is an attempt to add
 that missing language support:
 
 1. Sugar for declaring large homogenous tuples.
-2. Helper methods for initializing such tuples.
-3. Add a new SILGen ArgumentToPointer conversion that eliminates unneeded unsafe memory binding API usage.
-4. A `[Mutable]Collection` conformance to enable usage as a collection and accessing as contiguous storage.
-5. Smaller, more brief description when importing from C fixed size buffers as tuples.
-6. Allow for C imported C variables to compose with C APIs in a natural way.
+2. A bit in tuple type that states if when parsed, the tuple was originally parsed as a homogenous tuple.
+3. Helper methods for initializing such tuples.
+4. Add a new SILGen ArgumentToPointer conversion that eliminates unneeded unsafe memory binding API usage.
+5. A `[Mutable]Collection` conformance to enable usage as a collection and accessing as contiguous storage.
+6. Smaller, more brief description when importing from C fixed size buffers as tuples.
+7. Allow for C imported C variables to compose with C APIs in a natural way.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
@@ -151,11 +152,29 @@ extension PointerCache<T> {
 }
 ```
 
-In sum, the model doesn't scale well since we can not succintly describe a tuple
-of N elements without writing out the entire tuple and we can not use a tuple
-like a collection without writing a large unwieldy switch function that may not
-optimize well without compiler heroics (consider an optimization that
-specifically looked for this pattern and converted it to a jump table).
+To compound these problems of expressivity, large homogenous tuples can also
+cause poor type checker performance, as shown by the hard limit of 4096 put on importing
+arrays in the [ClangImporter/ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571):
+
+```c++
+ImportResult SwiftTypeConverter::VisitConstantArrayType(const clang::ConstantArrayType *type) {
+  ...
+  auto size = type->getSize().getZExtValue();
+  // An array of size N is imported as an N-element tuple which
+  // takes very long to compile. We chose 4096 as the upper limit because
+  // we don't want to break arrays of size PATH_MAX.
+  if (size > 4096)
+    return Type();
+  ...
+}
+
+// Taken/simplified from
+// https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571
+```
+
+In sum, the type checker here has run into the same problem of the programmer:
+we have made the problem more difficult than it need to be by forcing the
+expression of redundant information in the language.
 
 These issues also show up when importing code from C since fixed size arrays are
 imported as tuples from C. As an example, consider the following C code:
@@ -250,6 +269,13 @@ expressivity in the following ways:
    This capability is not integral to the proposal and if necessary can be sliced off and
    we can allow only for tuples to only have a single homogenous tuple element.
 
+2. We propose that TupleType in the compiler have a bit upon it that states if
+   the TupleType was originally parsed from a homogenous tuple. This will ensure
+   that we can print out the tuple with the sugar and can also use it to improve
+   type checker compile time by allowing us to know that we can use the first
+   element of the homogenous tuple (noting that the empty tuple is not a
+   homogenous tuple) for type checking purposes.
+
 2. We propose adding a series of pre-defined builtin initializers for homogenous
    tuples to ease homogenous tuple initialization. Specifically:
 
@@ -293,14 +319,15 @@ expressivity in the following ways:
    building upon the work done in `SE-TUPLE_COMPARABLE_HASHABLE`, allowing for
    users to:
 
-   1. Iterate over the tuple.
-   2. Get the count of the tuple in a programatic matter.
-   3. Use standard algorithms like map, reduce, and filter.
-   4. Apply the full set of Swift's algorithms to the type.
+   a. Iterate over the tuple.
+   b. Get the count of the tuple in a programatic matter.
+   c. Use standard algorithms like map, reduce, and filter.
+   d. Apply the full set of Swift's algorithms to the type.
 
 ## Detailed design
 
-The main changes to the Swift language itself come in a few areas:
+The main changes to the Swift language itself occurs when parsing/printing
+homogenous tuples:
 
 * Homogenous Tuple Span Parsing. This is implemented by changing the tuple
   element grammar as follows:
@@ -357,25 +384,25 @@ The main changes to the Swift language itself come in a few areas:
 
   4. Once we have finished parsing all tuple body elements, we then check the
      `isHomogenousTuple` bit. If said bit is set, then we mark our tuple type as
-     possessing this property. This ensures that when we are performing type
-     checking, we can just type check the single homogenous tuple type element
-     (which we can get from the first element of the tuple) rather than
-     performing a linear chain of type checking operations.
+     possessing this property. This ensures that when we can print out our
+     tuples nicely and when performing type checking only type check a single
+     type element rather than a linear sequence of tuples.
 
 * Homogenous Tuple Types and the ObjC Importer
 
+  To change the manner in which we import tuple types, we simply change in
+  ImportType.cpp SwiftTypeConverter::VisitConstantArrayType to create a new
+  tuple type with the appropriate number of elements and set the is homogenous
+  tuple bit.
+
 * Homogenous Tuple Types and extra methods
 
-* Homogenous Tuple Types and collection conformance.
+  Options: Could do a protocol (like Collection). Or maybe something in Type
+  Checker. Need to see where one can shim this in.
 
-// <---- END
+* Homogenous Tuple Types and Collection conformance
 
-Describe the design of the solution in detail. If it involves new
-syntax in the language, show the additions and changes to the Swift
-grammar. If it's a new API, show the full API and its documentation
-comments detailing what it does. The detail in this section should be
-sufficient for someone who is *not* one of the authors to be able to
-reasonably implement the feature.
+  We build upon the work in equatable, hashable for tuple
 
 ## Source compatibility
 
@@ -434,7 +461,7 @@ why you chose this approach instead.
 
 ## Acknowledgments
 
-If significant changes or improvements suggested by members of the 
+If significant changes or improvements suggested by members of the
 community were incorporated into the proposal as it developed, take a
-moment here to thank them for their contributions. Swift evolution is a 
+moment here to thank them for their contributions. Swift evolution is a
 collaborative process, and everyone's input should receive recognition!
