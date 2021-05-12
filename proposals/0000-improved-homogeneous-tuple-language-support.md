@@ -404,6 +404,10 @@ homogenous tuples:
 
   We build upon the work in equatable, hashable for tuple
 
+* Improved Tuple Type ABI? Could rely on 4096 limit? What one /could/ do is add
+  new loadable thing that fuses them if larger than a certain size and right
+  deployment target? 
+
 ## Source compatibility
 
 Relative to the Swift 3 evolution process, the source compatibility
@@ -456,12 +460,8 @@ in the Swift repository.
 
 ## Alternatives considered
 
-Describe alternative approaches to addressing the same problem, and
-why you chose this approach instead.
+The main alternative considered is whether or not to use a different syntax.
 
 ## Acknowledgments
 
-If significant changes or improvements suggested by members of the
-community were incorporated into the proposal as it developed, take a
-moment here to thank them for their contributions. Swift evolution is a
-collaborative process, and everyone's input should receive recognition!
+Thanks to Joe Groff for suggesting going down this path!
