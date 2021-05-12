@@ -1,7 +1,7 @@
 # Improved Language Support for Homogenous Tuples
 
 * Proposal: [SE-NNNN](NNNN-improved-homogenous-tuple-language-support.md)
-* Authors: [Michael Gottesman](https://github.com/gottesmm)
+  * Authors: [Michael Gottesman](https://github.com/gottesmm)
 * Review Manager: TBD
 * Status: **Awaiting implementation**
 
@@ -74,8 +74,31 @@ extension _SmallString {
 }
 ```
 
-We could additionally (for argument's sake), provide a subscript implementation for
-`_SmallString` to access its underlying bits:
+We could additionally (for argument's sake), provide a subscript implementation
+for `_SmallString` to access its underlying bits by either using
+`withUnsafePointer` or `withUnsafeBytes`.
+
+```swift
+extension _SmallString {
+  // Example 1.
+  internal subscript(_ num: Int) -> Int {
+    withUnsafePointer(to: x) { (ptr: UnsafePointer<(Int, Int)>) -> Int in
+      ptr.withMemoryRebound(to: Int.self, capacity: 2) { (reboundPtr: UnsafePointer<Int>) -> Int in
+        reboundPtr.advanced(by: num).pointee
+      }
+    }
+  }
+
+  // Example 2.
+  internal subscript(_ num: Int) -> Int {
+    withUnsafeBytes(of: x) { (ptr: UnsafeRawBufferPointer) -> Int in
+      ptr.load(fromByteOffset: num * MemoryLayout<Int>.stride, as: Int.self)
+    }
+  }
+}
+```
+
+or by using pattern matching and a potentially large switch:
 
 ```swift
 extension _SmallString {
@@ -92,10 +115,19 @@ extension _SmallString {
   }
 ```
 
-Sadly, while this approach works in the small, the resulting code is hard to
-maintain/implement small tasks as N gets large unless one uses a Swift source
-code generator like [gyb](https://github.com/apple/swift/blob/main/utils/gyb.py)
-or [Sourcery](https://github.com/krzysztofzablocki/Sourcery).
+Both of these approaches add unnecessary complexity to the program for what
+should be a simple operation, specifically:
+
+1. In the case of the first subscript implementation, we are relying on unsafe
+   code but we would be passing the tuple by value and hope the optimizer
+   eliminates the overhead. Relying on the optimizer is not bad in the large,
+   but for system programming we should not have to pray.
+   
+2. In the case of the second subscript implementation, pattern matching like
+   this works only in the small. Maintaining/implementing this type of pattern
+   matching as N requires one to be nimble to have to use a Swift source code
+   generator like [gyb](https://github.com/apple/swift/blob/main/utils/gyb.py)
+   or [Sourcery](https://github.com/krzysztofzablocki/Sourcery).
 
 To explore this idea, lets naively define a cache that at runtime we use to
 stash the first 128 pointers looked up via a System API that we are
