@@ -8,24 +8,32 @@
 ## Introduction
 
 Define a pure homogenous tuple of type `T` as a tuple that only contains
-elements of type `T`, e.x.: `(T, T, ..., T)`. These types of tuples are used by
-system programmers in Swift to express a fixed size buffer of type `T` with a
+elements of type `T`, e.x.: `(T, T, ..., T)`. Such tuples are used by system
+programmers in Swift to express a fixed size buffer of type `T` with a
 guaranteed layout. Not much language support has been provided to make working
-with tuple typed storage easy/expressive. This proposal is an attempt to add
-that missing language support:
+with tuple typed storage easy/expressive. In this proposal, we attack this
+language support hole by proposing the following: that missing language support:
 
-1. Sugar for declaring large homogenous tuples.
-2. A bit in tuple type that states if when parsed, the tuple was originally parsed as a homogenous tuple.
-3. Helper methods for initializing such tuples.
-4. Add a new SILGen ArgumentToPointer conversion that eliminates unneeded unsafe memory binding API usage.
-5. A `[Mutable]Collection` conformance to enable usage as a collection and accessing as contiguous storage.
-6. Smaller, more brief description when importing from C fixed size buffers as tuples.
-7. Allow for C imported C variables to compose with C APIs in a natural way.
+1. The addition of sugar for declaring large homogenous tuples.
+2. Adding a bit in tuple type that states if when parsed, the tuple was originally
+   parsed as a homogenous tuple. This will allow us to print succinctly big
+   tuples as well as improve type checker performance by eliminating the need to
+   perform linear type checking on each element of a homogenous tuple.
+3. Adding new initializers for homogenous tuples:
+   a. A repeating initializer that initializes all elements of the tuple to the same value.
+   b. An unsafe uninitialized memory based initializer similar to Array's.
+4. Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
+   as a collection and accessing as contiguous storage.
+5. Changing the Clang Importer to import fixed size arrays as homogenous tuples.
+6. Adding to the standard library a typed array view over such tuples that treats the tuple as a bag of bits.
+7. Eliminating language composition issues that prevent C fixed size arrays
+   imported as homogenous tuples from being passed in Swift to imported C APIs
+   related to said types without needing to use unsafe type pointer punning.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
 Swift in a minimal, composable way that helps system/stdlib programmers get
-their job done today in the context where these tuples are used.
+their job done today in the context where these tuples are already used today.
 
 Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/)
 
@@ -49,14 +57,47 @@ internal struct _SmallString {
 By declaring `_SmallString` as frozen and `_storage` as a homogenous tuple of
 type `UInt64`, we are able to guarantee that `_SmallString` when laid out in
 memory is exactly 128 bits and can be treated as layout compatible with other
-128 bit values. We can define initializers and accessors based off of the tuple
-representation as well as access the bottom/lower half of the bits using
-`tup.0`, `tup.1`:
+128 bit values, which is totally awesome!
+
+That being said, the utility of using homogenous tuples begins to break down as
+the size of the homogenous tuple storage that we need becomes larger. To explore
+these implications, imagine that we are defining a System API that wants to
+maintain a cache of the first 128 pointers that it sees to improve
+performance. Since we need to have enough storage for 128 pointers, we use a
+homogenous tuple of `UnsafeMutablePointer` that point at objects of type `T`
+that obey `MyProtocol`,
+
+```swift
+@frozen @usableFromInline
+struct PointerCache<T : MyProtocol> {
+  /// 128 pointers that we use to cache the first pointers that are passed
+  /// to our API.
+  @usableFromInline
+  internal var _storage: (UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>,
+                          /* 122 more pointers */
+                          UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>)
+}
+```
+
+We can define initializers and accessors based off of the tuple representation
+as well as access the bottom/lower half of the bits using `tup.0`, `tup.1`:
 
 ```swift
 extension _SmallString {
   @inlinable @inline(__always)
-  internal init(rawUnchecked bits: RawBitPattern) {
+  internal init() {
+    self.init(_StringObject(empty:()))
+  }
+
+  @inlinable @inline(__always)
+  internal init(_ object: _StringObject) {
+    let leading = object.rawBits.0.littleEndian
+    let trailing = object.rawBits.1.littleEndian
+    self.init(rawUnchecked: (leading, trailing))
+  }
+
+  @inlinable @inline(__always)
+  internal init(rawUnchecked bits: (UInt64, UInt64)) {
     self._storage = bits
   }
 
@@ -75,8 +116,25 @@ extension _SmallString {
 ```
 
 We could additionally (for argument's sake), provide a subscript implementation
-for `_SmallString` to access its underlying bits by either using
-`withUnsafePointer` or `withUnsafeBytes`.
+for `_SmallString` to access its underlying bits by using pattern matching and a
+switch:
+
+```swift
+extension _SmallString {
+  @inlinable
+  internal subscript(_ num: Int) -> UInt64 {
+    switch num {
+    case 0:
+      return _storage.0
+    case 1:
+      return _storage.1
+    default:
+      fatalError("num is too big!")
+    }
+  }
+```
+
+or using unsafe code via `withUnsafePointer` or `withUnsafeBytes`.
 
 ```swift
 extension _SmallString {
@@ -98,171 +156,71 @@ extension _SmallString {
 }
 ```
 
-or by using pattern matching and a potentially large switch:
+In all of these cases, the lack of language support add unnecessary complexity
+to the program for what should be simple primitive operations that should scale
+naturally to larger types without needing us to use unsafe code, specifically:
 
-```swift
-extension _SmallString {
-  @inlinable
-  internal subscript(_ num: Int) -> UInt64 {
-    switch num {
-    case 0:
-      return _storage.0
-    case 1:
-      return _storage.1
-    default:
-      fatalError("num is too big!")
-    }
-  }
-```
+1. In the case of the initializers, accessors, pattern matching subscripts we
+   are having to by hand initialize each individual part of the structure
+   without using a for loop or the like. This is reasonable in the small, but as
+   N gets larger, maintaining/implementing code in this manner requires a Swift
+   source code generator like
+   [gyb](https://github.com/apple/swift/blob/main/utils/gyb.py) or
+   [Sourcery](https://github.com/krzysztofzablocki/Sourcery). Consider a large
+   homogenous tuple of 128 elements.
 
-Both of these approaches add unnecessary complexity to the program for what
-should be a simple operation, specifically:
-
-1. In the case of the first subscript implementation, we are relying on unsafe
+2. In the case of the unsafe subscript implementation, we are relying on unsafe
    code but we would be passing the tuple by value and hope the optimizer
    eliminates the overhead. Relying on the optimizer is not bad in the large,
-   but for system programming we should not have to pray.
-   
-2. In the case of the second subscript implementation, pattern matching like
-   this works only in the small. Maintaining/implementing this type of pattern
-   matching as N requires one to be nimble to have to use a Swift source code
-   generator like [gyb](https://github.com/apple/swift/blob/main/utils/gyb.py)
-   or [Sourcery](https://github.com/krzysztofzablocki/Sourcery).
+   but when system programming praying is insufficient since the programmer
+   needs performance that is guaranteed.
 
-To explore this idea, lets naively define a cache that at runtime we use to
-stash the first 128 pointers looked up via a System API that we are
-maintaining. Since we need to have enough storage for 128 pointers, we use a
-homogenous tuple of `UnsafeMutablePointer` that point at objects of type `T`
-that obey `MyProtocol`,
+These issues of expressivity just in terms of Swift itself also show up when
+working with imported C code. Specifically:
 
-```swift
-@frozen @usableFromInline
-struct PointerCache<T : MyProtocol> {
-  /// 128 pointers that we use to cache the first pointers that are passed
-  /// to our API.
-  @usableFromInline
-  internal var _storage: (UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>,
-                          /* 122 more pointers */
-                          UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>)
-}
-```
+1. Large homogenous tuples increase compile time specifically by harming type
+   checker performance. In fact, the ClangImporter will not import a fixed size
+   array if the array would be imported as a tuple with more than 4096 elements
+   due to this issue (see
+   [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
+   a high level, the type checker is running into the same problem of the
+   programmer: we have made the problem more difficult than it need to be by
+   forcing the expression of redundant information in the language.
 
-Clearly, even though `_storage` represents at a binary level 128 pointers, we
-can not initialize it in a nice way without a source generator (simulated by
-comments in `/* */` in the code below):
+2. When one imports a fixed size array from C as a tuple, one must define ones
+   own nominal type on top that uses the techniques above in order to
 
-```swift
-struct PointerCache<T> {
-  @usableFromInline
-  internal init() {
-    _storage = (nil, nil, ..., /* nil 125 times */, nil)
-  }
-  @usableFromInline
-  internal init(sentinelValue: UnsafeMutablePointer<T>) {
-    _storage = (sentinelValue, sentinelValue, ..., /* sentinelValue 125 times */, sentinelValue)
-  }
-}
-```
-
-or have a subscript implementation that does not use a source code generator,
-
-```swift
-extension PointerCache<T> {
-  subscript(index: Int) -> T {
-    switch index {
-    case 0:
-      return _storage.0
-    case 1:
-      return _storage.1
-    /* ... 125 more cases ... */
-    case 127:
-      return _storage.127
-    default:
-      fatalError("Out of bounds!")
-    }
-  }
-}
-```
-
-To compound these problems of expressivity, large homogenous tuples can also
-cause poor type checker performance, as shown by the hard limit of 4096 put on importing
-arrays in the [ClangImporter/ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571):
-
-```c++
-ImportResult SwiftTypeConverter::VisitConstantArrayType(const clang::ConstantArrayType *type) {
-  ...
-  auto size = type->getSize().getZExtValue();
-  // An array of size N is imported as an N-element tuple which
-  // takes very long to compile. We chose 4096 as the upper limit because
-  // we don't want to break arrays of size PATH_MAX.
-  if (size > 4096)
-    return Type();
-  ...
-}
-
-// Taken/simplified from
-// https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571
-```
-
-In sum, the type checker here has run into the same problem of the programmer:
-we have made the problem more difficult than it need to be by forcing the
-expression of redundant information in the language.
-
-These issues also show up when importing code from C since fixed size arrays are
-imported as tuples from C. As an example, consider the following C code:
-
-```c
-float globalDataBuffer[1024];
-struct MyStruct {
-    int dataBuffer[128];
-};
-void useMyDataBuffer(const float *buffer);
-```
-
-These will be imported into Swift as:
-
-```swift
-var globalDataBuffer: (Float, Float, ..., /* 1021 Floats */, Float)
-struct MyStruct {
-  var dataBuffer: (Int, Int, ..., /* 125 Ints */, Int)
-}
-func useGlobalDataBuffer(buffer: UnsafePointer<Float>)
-```
-
-Beyond being hard to read (sans our magic "source generator comments"), this
-code that used to compose in C, no longer composes correctly. As an example, in
-C, it is easy to pass `globalDataBuffer` to `useGlobalDataBuffer`:
-
-```c
-void myF() {
-  useGlobalDataBuffer(&globalDataBuffer); // Works!
-}
-```
-
-In contrast in Swift, we immediately run into type system problems:
-
-```swift
-func myF() {
-  useGlobalDataBuffer(&globalDataBuffer) // Error! Cannot convert value of type 'UnsafeMutablePointer<(Float, /* Float 1022 times */, Float)>' to expected argument type 'UnsafeMutablePointer<Float>'
-}
-```
-
-To work around this, we must unsafely use memory binding APIs to safely type pun
-our pointer (taking advantage of layout compatibility):
-
-```swift
-  withUnsafeBytes(of: &globalDataBuffer) { (buff: UnsafeRawBufferPointer) in
-    getValue(buff.baseAddress!.assumingMemoryBound(to: Float.self))
-  }
-```
-
-bloating what should be a simple/straight forward operation (passing the address
-of a C variable to a C function).
-
-Additionally, what if we want to iterate over one of these imported C arrays? If
-one wishes to do so in a nice manner, one must define a subscript operator that
-uses pattern matching (as the author did above) for the imported C array. This
-can lead to bugs if the subscript's pattern matching isn't updated.
+3. Imported fixed size arrays from C no longer compose with associated C apis
+   when working with C code in Swift. As an example:
+   ```c
+   float globalDataBuffer[1024];
+   void useMyDataBuffer(const float *buffer);
+   ```
+   This API is imported into Swift as:
+   ```swift
+   var globalDataBuffer: (Float, Float, ..., /* 1021 Floats */, Float)
+   func useGlobalDataBuffer(buffer: UnsafePointer<Float>)
+   ```
+   The user may expect to be able to just pass `globalDataBuffer` to
+   `useMyDataBuffer` like one could do in C, but if one attempts to do so in
+   Swift, one will immediately hit the following type checker error:
+   ```swift
+   func myF() {
+     // Error! Cannot convert value of type 'UnsafeMutablePointer<(Float, /* Float
+     // 1022 times */, Float)>' to expected argument type
+     // 'UnsafeMutablePointer<Float>'
+     useGlobalDataBuffer(&globalDataBuffer)
+   }
+   ```
+   To work around this, we must unsafely use memory binding APIs to safely type pun
+   our pointer (taking advantage of layout compatibility):
+   ```swift
+     withUnsafeBytes(of: &globalDataBuffer) { (buff: UnsafeRawBufferPointer) in
+       getValue(buff.baseAddress!.assumingMemoryBound(to: Float.self))
+     }
+   ```
+   bloating what should be a simple/straight forward operation (passing the address
+   of a C variable to a C function).
 
 ## Proposed solution
 
@@ -320,14 +278,38 @@ expressivity in the following ways:
      NOTE: Since the actual number of elements in the homogenous tuple is fixed,
      we do not need to pass in the count.
 
-   * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>) throws -> Void) rethrows`:
+   * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>, inout Optional<Int>) throws -> Void) rethrows`:
+     This method allows for one to either initialize all elements of a tuple with
+     pre-known values avoiding the need to first zero initialize such a tuple:
+
+     ```swift
+     // Fill tuple with integral data.
+     let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, count: inout Int) in
+       for i in 0..<1024 { x[i] = i }
+       count = 1024
+     }
+     // Or more succintly:
+     let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
+
+     // memcpy data from a data buffer into a tuple after being called via a callback from C.
+     var _cache: (1024 x Int) = ...
+     func callBackForC(_ src: UnsafeMutableBufferPointer<Int>) {
+       precondition(src.size == 1024)
+       _cache = (1024 x Int) { dst: UnsafeMutableBufferPointer<Int> in
+         memcpy(dst.baseAddress!, src.baseAddress!, src.size * MemoryLayout<Int>.stride)
+       }
+     }
+     ```
+
+  * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>) throws -> Void) rethrows`:
      This method allows for one to initialize all elements of a tuple with
      pre-known values avoiding the need to first zero initialize such a tuple:
 
      ```swift
      // Fill tuple with integral data.
-     let x = (1024 x Int) { x: UnsafeMutableBufferPointer<Int> in
+     let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, count: inout Int) in
        for i in 0..<1024 { x[i] = i }
+       count = 1024
      }
      // Or more succintly:
      let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
