@@ -11,24 +11,27 @@ Define a pure homogenous tuple of type `T` as a tuple that only contains
 elements of type `T`, e.x.: `(T, T, ..., T)`. Such tuples are used by system
 programmers in Swift to express a fixed size buffer of type `T` with a
 guaranteed layout. Not much language support has been provided to make working
-with tuple typed storage easy/expressive. In this proposal, we attack this
-language support hole by proposing the following: that missing language support:
+with tuple typed storage easy/expressive. In this proposal, we attack this hole
+by proposing the following changes to the language:
 
 1. The addition of sugar for declaring large homogenous tuples.
-2. Adding a bit in tuple type that states if when parsed, the tuple was originally
-   parsed as a homogenous tuple. This will allow us to print succinctly big
-   tuples as well as improve type checker performance by eliminating the need to
-   perform linear type checking on each element of a homogenous tuple.
+2. When parsing tuple types, stashing a bit in the tuple type that states if we
+   parsed the tuple as a homogenous tuple.
+3. Improve type checker performance for such tuples by taking advantage of said
+   bit to eliminate the need to perform type checking operations on each element
+   of the tuple instead of just the first element.
 3. Adding new initializers for homogenous tuples:
    a. A repeating initializer that initializes all elements of the tuple to the same value.
    b. An unsafe uninitialized memory based initializer similar to Array's.
 4. Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
    as a collection and accessing as contiguous storage.
-5. Changing the Clang Importer to import fixed size arrays as homogenous tuples.
-6. Adding to the standard library a typed array view over such tuples that treats the tuple as a bag of bits.
-7. Eliminating language composition issues that prevent C fixed size arrays
-   imported as homogenous tuples from being passed in Swift to imported C APIs
-   related to said types without needing to use unsafe type pointer punning.
+5. Changing the Clang Importer to import fixed size arrays as sugared homogenous
+   tuples and remove the arbitrary limitation on the number of elements that an
+   imported fixed size array can have (4096 elements).
+6. Eliminating the need to use unsafe type pointer punning to pass imported C
+   fixed size arrays to related imported C APIs.
+7. Adding to the Standard Library a typed array view over such tuples that
+   treats the tuple as a bag of bits.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
@@ -57,9 +60,9 @@ internal struct _SmallString {
 By declaring `_SmallString` as frozen and `_storage` as a homogenous tuple of
 type `UInt64`, we are able to guarantee that `_SmallString` when laid out in
 memory is exactly 128 bits and can be treated as layout compatible with other
-128 bit values, which is totally awesome! That being said, the utility of using
-homogenous tuples begins to break down as the size of the homogenous tuple
-storage that we need becomes larger. We explore that below.
+128 bit values, which is totally awesome! That being said, using homogenous
+tuples in this manner starts to create usage difficulties as the number of
+elements in the tuple increases. We explore this below.
 
 ### Basic operations on large tuples forced to use a source generator or unsafe code
 
