@@ -57,100 +57,77 @@ internal struct _SmallString {
 By declaring `_SmallString` as frozen and `_storage` as a homogenous tuple of
 type `UInt64`, we are able to guarantee that `_SmallString` when laid out in
 memory is exactly 128 bits and can be treated as layout compatible with other
-128 bit values, which is totally awesome!
+128 bit values, which is totally awesome! That being said, the utility of using
+homogenous tuples begins to break down as the size of the homogenous tuple
+storage that we need becomes larger. We explore that below.
 
-That being said, the utility of using homogenous tuples begins to break down as
-the size of the homogenous tuple storage that we need becomes larger. To explore
-these implications, imagine that we are defining a System API that wants to
-maintain a cache of the first 128 pointers that it sees to improve
-performance. Since we need to have enough storage for 128 pointers, we use a
-homogenous tuple of `UnsafeMutablePointer` that point at objects of type `T`
-that obey `MyProtocol`,
+### Basic operations on large tuples forced to use a source generator or unsafe code
+
+To explore the implications of the current homogenous tuple model, imagine that
+we are defining a System API that wants to maintain a cache of 128 pointers to
+improve performance. Since we need to have enough storage for 128 pointers, we
+use a homogenous tuple of `UnsafeMutablePointer` that point at objects of type
+`T`:
 
 ```swift
-@frozen @usableFromInline
-struct PointerCache<T : MyProtocol> {
+@frozen
+struct PointerCache<T> {
+  typealias PointerType = UnsafeMutablePointer<T>
+
   /// 128 pointers that we use to cache the first pointers that are passed
   /// to our API.
-  @usableFromInline
-  internal var _storage: (UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>,
-                          /* 122 more pointers */
-                          UnsafeMutablePointer<T>, UnsafeMutablePointer<T>, UnsafeMutablePointer<T>)
+  var _storage: (PointerType?, /*126 more pointers*/, PointerType?)
 }
 ```
 
-We can define initializers and accessors based off of the tuple representation
-as well as access the bottom/lower half of the bits using `tup.0`, `tup.1`:
+If we want to define an initializer that initializes this tuple to nil, we
+either have to use a Swift source generator or use unsafe code:
 
 ```swift
-extension _SmallString {
-  @inlinable @inline(__always)
-  internal init() {
-    self.init(_StringObject(empty:()))
+extension PointerCache {
+  init(repeating value: PointerType) {
+    _storage = (value, /* value 125 times */, value)
   }
 
-  @inlinable @inline(__always)
-  internal init(_ object: _StringObject) {
-    let leading = object.rawBits.0.littleEndian
-    let trailing = object.rawBits.1.littleEndian
-    self.init(rawUnchecked: (leading, trailing))
-  }
-
-  @inlinable @inline(__always)
-  internal init(rawUnchecked bits: (UInt64, UInt64)) {
-    self._storage = bits
-  }
-
-  @inlinable
-  internal var leadingRawBits: UInt64 {
-    @inline(__always) get { return _storage.0 }
-    @inline(__always) set { _storage.0 = newValue }
-  }
-
-  @inlinable
-  internal var trailingRawBits: UInt64 {
-    @inline(__always) get { return _storage.1 }
-    @inline(__always) set { _storage.1 = newValue }
-  }
-}
-```
-
-We could additionally (for argument's sake), provide a subscript implementation
-for `_SmallString` to access its underlying bits by using pattern matching and a
-switch:
-
-```swift
-extension _SmallString {
-  @inlinable
-  internal subscript(_ num: Int) -> UInt64 {
-    switch num {
-    case 0:
-      return _storage.0
-    case 1:
-      return _storage.1
-    default:
-      fatalError("num is too big!")
-    }
-  }
-```
-
-or using unsafe code via `withUnsafePointer` or `withUnsafeBytes`.
-
-```swift
-extension _SmallString {
-  // Example 1.
-  internal subscript(_ num: Int) -> Int {
-    withUnsafePointer(to: x) { (ptr: UnsafePointer<(Int, Int)>) -> Int in
-      ptr.withMemoryRebound(to: Int.self, capacity: 2) { (reboundPtr: UnsafePointer<Int>) -> Int in
-        reboundPtr.advanced(by: num).pointee
+  init(unsafe: ()) {
+    withUnsafeMutableBytes(of: &_storage) { (buffer: UnsafeMutableRawBufferPointer) in
+      for i in 0..<128 {
+        buffer.storeBytes(of: nil, toByteOffset: i*MemoryLayout<PointerType?>.stride, as: PointerType?.self)
       }
     }
   }
 
-  // Example 2.
-  internal subscript(_ num: Int) -> Int {
-    withUnsafeBytes(of: x) { (ptr: UnsafeRawBufferPointer) -> Int in
-      ptr.load(fromByteOffset: num * MemoryLayout<Int>.stride, as: Int.self)
+  init(unsafe2: ()) {
+    withUnsafeMutableBytes(of: &_storage) { (buffer: UnsafeMutableRawBufferPointer) in
+      memset(buffer.baseAddress!, 0, 128*MemoryLayout<PointerType?>.stride)
+    }
+  }
+}
+```
+
+If we want to define a subscript for our type, then we are forced to again use
+either a Swift source code generator or use unsafe code,
+
+```swift
+extension PointerCache {
+  subscript(index: Int) -> PointerType? {
+    switch index {
+    case 0:
+      return _storage.0
+    case 1:
+      return _storage.1
+    /* ... 125 more cases ... */
+    case 127:
+      return _storage.127
+    default:
+      fatalError("...")
+  }
+}
+
+extension PointerCache {
+  subscript(unsafe index: Int) -> PointerType? {
+    withUnsafeBytes(of: x) { (buffer: UnsafeRawBufferPointer) -> PointerType? in
+        buffer.load(fromByteOffset: 5*MemoryLayout<PointerType?>.stride, as: PointerType?)
     }
   }
 }
@@ -158,22 +135,16 @@ extension _SmallString {
 
 In all of these cases, the lack of language support add unnecessary complexity
 to the program for what should be simple primitive operations that should scale
-naturally to larger types without needing us to use unsafe code, specifically:
+naturally to larger types without needing us to use unsafe code. Even if we say
+that the unsafe code example is ok, we would be relying on the optimizer to
+eliminate overhead. Relying on the optimizer is ok in the large, but when system
+programming praying is insufficient since the programmer really needs to be able
+to guarantee that the relevant defined performance constraints are guaranteed at
+compile time. This generally forces the programmer to look at the assembly to
+guarantee that the optimizer optimized the unsafe code as the programmer
+expected.
 
-1. In the case of the initializers, accessors, pattern matching subscripts we
-   are having to by hand initialize each individual part of the structure
-   without using a for loop or the like. This is reasonable in the small, but as
-   N gets larger, maintaining/implementing code in this manner requires a Swift
-   source code generator like
-   [gyb](https://github.com/apple/swift/blob/main/utils/gyb.py) or
-   [Sourcery](https://github.com/krzysztofzablocki/Sourcery). Consider a large
-   homogenous tuple of 128 elements.
-
-2. In the case of the unsafe subscript implementation, we are relying on unsafe
-   code but we would be passing the tuple by value and hope the optimizer
-   eliminates the overhead. Relying on the optimizer is not bad in the large,
-   but when system programming praying is insufficient since the programmer
-   needs performance that is guaranteed.
+### Large fixed size arrays
 
 These issues of expressivity just in terms of Swift itself also show up when
 working with imported C code. Specifically:
