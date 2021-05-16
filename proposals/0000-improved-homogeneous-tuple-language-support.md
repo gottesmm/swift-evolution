@@ -5,33 +5,42 @@
 * Review Manager: TBD
 * Status: **Awaiting implementation**
 
+* Reference: [SE-0283](0283-tuples-are-equatable-comparable-hashable.md)
+
 ## Introduction
 
-Define a pure homogenous tuple of type `T` as a tuple that only contains
-elements of type `T`, e.x.: `(T, T, ..., T)`. Such tuples are used by system
-programmers in Swift to express a fixed size buffer of type `T` with a
-guaranteed layout. Not much language support has been provided to make working
-with tuple typed storage easy/expressive. In this proposal, we attack this hole
-by proposing the following changes to the language:
+Define a pure homogenous tuple of type `T` as a non-empty tuple that only
+contains elements of type `T`, e.x.: `(T, T, ..., T)`. Swift System programmers
+use these tuples in (non-exclusively) the following contexts:
 
-1. The addition of sugar for declaring large homogenous tuples.
-2. When parsing tuple types, stashing a bit in the tuple type that states if we
-   parsed the tuple as a homogenous tuple.
-3. Improve type checker performance for such tuples by taking advantage of said
-   bit to eliminate the need to perform type checking operations on each element
-   of the tuple instead of just the first element.
-3. Adding new initializers for homogenous tuples:
-   a. A repeating initializer that initializes all elements of the tuple to the same value.
-   b. An unsafe uninitialized memory based initializer similar to Array's.
-4. Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
-   as a collection and accessing as contiguous storage.
-5. Changing the Clang Importer to import fixed size arrays as sugared homogenous
-   tuples and remove the arbitrary limitation on the number of elements that an
-   imported fixed size array can have (4096 elements).
-6. Eliminating the need to use unsafe type pointer punning to pass imported C
-   fixed size arrays to related imported C APIs.
-7. Adding to the Standard Library a typed array view over such tuples that
-   treats the tuple as a bag of bits.
+1. Defining a Swift nominal type that uses a homogenous tuples to represent a field with a fixed layout of bytes (e.x.: SmallString)
+2. Writing code that uses an imported C fixed size array in Swift.
+
+There has historically not been much language support specifically for
+homogenous tuples or even tuples in general. In this proposal, we attempt to
+incrementally back fill such language support in a manner that makes homogenous
+tuples easier to write and compose better with the rest of the language. The
+specific list of proposed changes are:
+
+a. The addition of sugar for declaring large homogenous tuples. (1), (2)
+b. When parsing tuple types, stashing a bit in the tuple type that states if we
+   parsed the tuple as a homogenous tuple to allow for improved type checking
+   performance and to enable printing of large homogenous tuples with the sugar
+   defined by (a). (1), (2)
+c. Adding new initializers for homogenous tuples:
+   a. A repeating initializer that initializes all elements of the tuple to the same value. (1)
+   b. An unsafe uninitialized memory based initializer similar to Array's. (1)
+d. Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
+   as a collection and accessing as contiguous storage. (1) (2)
+e. Changing the Clang Importer to import fixed size arrays as sugared homogenous
+   tuples and remove the arbitrary limitation on the number of elements (4096
+   elements) that an imported fixed size array can have now that type checking
+   homogenous tuples is fast. (2)
+f. Eliminating the need to use unsafe type pointer punning to pass imported C
+   fixed size arrays to related imported C APIs. (2)
+
+NOTE: (1), (2) is used to notate which use case a specific alpha-numeric list
+element above corresponds to.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
@@ -60,11 +69,24 @@ internal struct _SmallString {
 By declaring `_SmallString` as frozen and `_storage` as a homogenous tuple of
 type `UInt64`, we are able to guarantee that `_SmallString` when laid out in
 memory is exactly 128 bits and can be treated as layout compatible with other
-128 bit values, which is totally awesome! That being said, using homogenous
-tuples in this manner starts to create usage difficulties as the number of
-elements in the tuple increases. We explore this below.
+128 bit values, which is totally awesome! That being said, as the number of
+tuple elements increase, using homogenous tuples in this manner does not scale
+from a usability and compile time perspective. We explore these difficulties
+below:
 
-### Basic operations on large tuples forced to use a source generator or unsafe code
+### Problem 1: Large homogenous tuples result in linear type checking behavior
+
+The first issue that naturally comes up is type checker performance. Today, when
+performing type checking, the type checker must type check each tuple element
+specifically to check properties such as if every element of a tuple obeys a
+protocol when inferring if a tuple type is Comparable or Hashable due to
+[SE-0283](0283-tuples-are-equatable-comparable-hashable.md). This can make large
+homogenous tuples incur a significant type checking overhead when being
+used. Tuple in it of themselves are expensive enough already to typecheck as
+shown by the clang importer posessing an artifical limit of 4096 of the number
+of elements of an importable C fixed size array.
+
+### Problem 2: Basic operations on large homogenous tuples require use of a source generator or unsafe code
 
 To explore the implications of the current homogenous tuple model, imagine that
 we are defining a System API that wants to maintain a cache of 128 pointers to
@@ -108,8 +130,9 @@ extension PointerCache {
 }
 ```
 
-If we want to define a subscript for our type, then we are forced to again use
-either a Swift source code generator or use unsafe code,
+If we want to define a Collection conformance for our type, we must wrap our
+tuple in a nominal type and are forced to again use either a Swift source code
+generator or use unsafe code,
 
 ```swift
 extension PointerCache {
@@ -130,8 +153,26 @@ extension PointerCache {
 extension PointerCache {
   subscript(unsafe index: Int) -> PointerType? {
     withUnsafeBytes(of: x) { (buffer: UnsafeRawBufferPointer) -> PointerType? in
-        buffer.load(fromByteOffset: 5*MemoryLayout<PointerType?>.stride, as: PointerType?)
+        buffer.load(fromByteOffset: index*MemoryLayout<PointerType?>.stride, as: PointerType?)
     }
+  }
+}
+```
+
+Even with this, we still are forced to avoid the natural manner of iterating in
+Swift, the for-in loop and instead must iterate by using an index range and
+subscript into the type:
+
+```swift
+func printCache(_ p: PointerCache) {
+  for i in 0..<1024 {
+    print(p[i])
+  }
+}
+// Instead of
+func printCache(_ p : PointerCache) {
+  for elt in p {
+    print(elt)
   }
 }
 ```
@@ -141,153 +182,188 @@ to the program for what should be simple primitive operations that should scale
 naturally to larger types without needing us to use unsafe code. Even if we say
 that the unsafe code example is ok, we would be relying on the optimizer to
 eliminate overhead. Relying on the optimizer is ok in the large, but when system
-programming praying is insufficient since the programmer really needs to be able
-to guarantee that the relevant defined performance constraints are guaranteed at
-compile time. This generally forces the programmer to look at the assembly to
-guarantee that the optimizer optimized the unsafe code as the programmer
-expected.
+programming praying is insufficient since the programmer must at compile time be
+able to guarantee certain performance constraints. This generally forces the
+programmer to look at the assembly to guarantee that the optimizer optimized the
+unsafe code as the programmer expected, an unfortunate outcome.
 
-### Large fixed size arrays
+### Problem 3: Imported C fixed size arrays do not compose well with other Swift language constructs
 
-These issues of expressivity just in terms of Swift itself also show up when
-working with imported C code. Specifically:
+The Clang Importer today imports C fixed size arrays into Swift as homogenous
+tuples. For instance, the following C:
 
-1. Large homogenous tuples increase compile time specifically by harming type
-   checker performance. In fact, the ClangImporter will not import a fixed size
-   array if the array would be imported as a tuple with more than 4096 elements
-   due to this issue (see
+```c
+typedef struct {
+  float dataBuffer[1024];
+} MyData_t;
+void printFloatData(const float *buffer);
+```
+
+would be imported as:
+
+```swift
+struct MyData_t {
+  dataBuffer: (Float, ... /* 1022 Floats */, ..., Float)
+}
+void printFloatData(UnsafePointer<Float>);
+```
+
+The lack of language support for tuples results in these imported arrays not
+being as easy to work with as they should be:
+
+1. The ClangImporter due to the bad type checker performance of large homogenous
+   tuples will not import a fixed size array if the array would be imported as a
+   tuple with more than 4096 elements (see
    [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
    a high level, the type checker is running into the same problem of the
    programmer: we have made the problem more difficult than it need to be by
    forcing the expression of redundant information in the language.
 
-2. When one imports a fixed size array from C as a tuple, one must define ones
-   own nominal type on top that uses the techniques above in order to
+2. Imported fixed size arrays can not be concisely iterated over due to
+   homogenous tuples lacking a Collection conformance. This makes an operation
+   that is easy to write in C much harder to perform in Swift since one must
+   define a nominal type wrapper and use one of the techniques above from our
+   PointerCache example. As a quick reminder using our imported `MyData_t`, this
+   is how we could use unsafe code to write our print method:
 
-3. Imported fixed size arrays from C no longer compose with associated C apis
-   when working with C code in Swift. As an example:
-   ```c
-   float globalDataBuffer[1024];
-   void useMyDataBuffer(const float *buffer);
-   ```
-   This API is imported into Swift as:
    ```swift
-   var globalDataBuffer: (Float, Float, ..., /* 1021 Floats */, Float)
-   func useGlobalDataBuffer(buffer: UnsafePointer<Float>)
-   ```
-   The user may expect to be able to just pass `globalDataBuffer` to
-   `useMyDataBuffer` like one could do in C, but if one attempts to do so in
-   Swift, one will immediately hit the following type checker error:
-   ```swift
-   func myF() {
-     // Error! Cannot convert value of type 'UnsafeMutablePointer<(Float, /* Float
-     // 1022 times */, Float)>' to expected argument type
-     // 'UnsafeMutablePointer<Float>'
-     useGlobalDataBuffer(&globalDataBuffer)
+   extension MyData_t {
+     func print() {
+       withUnsafeBytes(of: dataBuffer) { (buffer: UnsafeRawBufferPointer) -> PointerType? in
+         for i in 0..<1024 {
+            let f = buffer.load(fromByteOffset: i*MemoryLayout<Float>.stride, as: Float)
+            print(f)
+         }
+       }
+     }
    }
    ```
-   To work around this, we must unsafely use memory binding APIs to safely type pun
-   our pointer (taking advantage of layout compatibility):
+
+3. Imported fixed size arrays from C no longer compose with associated C apis
+   when working with C code in Swift. As an example, if we wanted to use the
+   imported C API `printFloatData` with our C imported type, we would be unable
+   to write the natural code due to the types not lining up:
    ```swift
-     withUnsafeBytes(of: &globalDataBuffer) { (buff: UnsafeRawBufferPointer) in
-       getValue(buff.baseAddress!.assumingMemoryBound(to: Float.self))
+      extension MyData_t {
+        mutating func cPrint1() {
+          // We get a type error here since printFloatData accepts an
+          // UnsafePointer<Float> as its first argument and
+          // '&dataBuffer' is an UnsafePointer<(Float, ..., Float)>.
+          printFloatData(&dataBuffer) // Error! Types don't line up!
+        }
+      }
+   ```
+   but instead must write the following verbose code to satisfy the type checker:
+   ```swift
+     extension MyData_t {
+       func cPrint() {
+         withUnsafeBytes(of: x?.dataBuffer) {
+           printFloatData($0.baseAddress!.assumingMemoryBound(to: Float.self))
+         }
+       }
      }
    ```
-   bloating what should be a simple/straight forward operation (passing the address
-   of a C variable to a C function).
 
 ## Proposed solution
 
-In order to make the life easier for System Programmers, we attack this lack of
-expressivity in the following ways:
+In order to make the life easier for System Programmers, we suggest adding the
+following language support:
 
-1. We propose a new sugar syntax for a "homogenous tuple span"
-   element. The grammar of tuple elements in Swift would be extended as follows:
-   ```swift
-     (5 x Int)
-   ```
-   which would expand out (that is de-sugared) to the following type in the parser:
-   ```swift
-     (Int, Int, Int, Int, Int)
-   ```
-   This directly attacks and eliminates the declaration issue around declaring
-   large tuples and will enable us to import C types with brevity allowing us to
-   import the earlier mentioned C code as:
-   ```swift
-   var globalDataBuffer: (1024 x Float)
-   struct MyStruct {
-     var dataBuffer: (128 x Int)
-   }
-   ```
-   Define any tuple that consists of a single homogenous tuple span as
-   a _pure homogenous tuple_.
+### Syntax Change: Homogenous Tuple Type Sugar
 
-   As an additional bonus a homogenous tuple span element can be mix/matched
-   with other elements to create more complex layout compatible data structures,
-   e.x.:
-   ```swift
-     (Float, 5 x Int, String, 2 x AnyObject)
-     // --> expands to
-     (Float, Int, Int, Int, Int, Int, String, AnyObject, AnyObject)
-   ```
-   This capability is not integral to the proposal and if necessary can be sliced off and
-   we can allow only for tuples to only have a single homogenous tuple element.
+We propose a new sugar syntax for a "homogenous tuple span" element. The
+grammar of tuple elements in Swift would be extended as follows:
 
-2. We propose that TupleType in the compiler have a bit upon it that states if
-   the TupleType was originally parsed from a homogenous tuple. This will ensure
-   that we can print out the tuple with the sugar and can also use it to improve
-   type checker compile time by allowing us to know that we can use the first
-   element of the homogenous tuple (noting that the empty tuple is not a
-   homogenous tuple) for type checking purposes.
+```swift
+(5 x Int) -> (Int, Int, Int, Int, Int)
+```
 
-2. We propose adding a series of pre-defined builtin initializers for homogenous
-   tuples to ease homogenous tuple initialization. Specifically:
+This is just type sugar that is expanded before type checking, so beyond the
+homogenous bit that we set in the tuple type itself, the rest of the compiler
+just sees a normal tuple and thus will be minimally effected.
 
-   * `init(repeating: repeatedValue: Element)`: This will allow for users to easily initialize a
-     large tuple all with the same value such as nil or a sentinel value:
-     ```swift
-     let x = (128 x Int)(repeating: 0)
-     let y = (128 x UnsafePointer<MyDataType>)(repeating: sentinelValue)
-     ```
-     NOTE: Since the actual number of elements in the homogenous tuple is fixed,
-     we do not need to pass in the count.
+As an additional unnecessary extension, a homogenous tuple span element can be mix/matched
+with other elements to create more complex layout compatible data structures,
+e.x.:
+```swift
+(Float, 5 x Int, String, 2 x AnyObject)
+// --> expands to
+(Float, Int, Int, Int, Int, Int, String, AnyObject, AnyObject)
+```
 
-   * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>, inout Optional<Int>) throws -> Void) rethrows`:
-     This method allows for one to either initialize all elements of a tuple with
-     pre-known values avoiding the need to first zero initialize such a tuple:
+This capability is not integral to the proposal and if necessary can be sliced off and
+we can allow only for tuples to only have a single homogenous tuple element.
 
-     ```swift
-     // Fill tuple with integral data.
-     let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, count: inout Int) in
-       for i in 0..<1024 { x[i] = i }
-       count = 1024
-     }
-     // Or more succintly:
-     let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
+### Type Checker: Use homogenous tuple bit to decrease time needed to TypeCheck homogenous tuples
 
-     // memcpy data from a data buffer into a tuple after being called via a callback from C.
-     var _cache: (1024 x Int) = ...
-     func callBackForC(_ src: UnsafeMutableBufferPointer<Int>) {
-       precondition(src.size == 1024)
-       _cache = (1024 x Int) { dst: UnsafeMutableBufferPointer<Int> in
-         memcpy(dst.baseAddress!, src.baseAddress!, src.size * MemoryLayout<Int>.stride)
-       }
-     }
-     ```
+Today the type checker has to perform a linear amount of work when type checking
+homogenous tuples. This is exascerbated by the comparable/equatable/hashable
+conformances added in
+[SE-0283](0283-tuples-are-equatable-comparable-hashable.md). We can eliminate
+this for large homogenous tuples since when we typecheck we will be able to
+infer that all elements of a tuple that has the homogenous tuple bit set is the
+same, allowing the type checker can just type check the first element of the
+tuple type and use only that for type checking purposes.
 
-  * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>) throws -> Void) rethrows`:
+### Standard Library/Runtime Improvements:
+
+We propose the following changes to the stdlib/runtime:
+
+1. Add builtin `RandomAccessCollection` and `MutableCollection` Collection conformance. These will be implemented in the same manner as [SE-0283](0283-tuples-are-equatable-comparable-hashable.md):
+
+2. Add the below init helpers for initializing homogenous tuples. These could be implemented 
+  * `init(repeating: repeatedValue: Element)`: This will allow for users to easily initialize a
+    large tuple all with the same value such as nil or a sentinel value:
+    ```swift
+    let x = (128 x Int)(repeating: 0)
+    let y = (128 x UnsafePointer<MyDataType>)(repeating: sentinelValue)
+    ```
+    NOTE: Since the actual number of elements in the homogenous tuple is fixed,
+    we do not need to pass in the count.
+  
+  * `init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>, inout Optional<Int>) throws -> Void) rethrows`:
+    This method allows for one to either initialize all elements of a tuple with
+    pre-known values avoiding the need to first zero initialize such a tuple:
+  
+    ```swift
+    // Fill tuple with integral data.
+    let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, count: inout Int) in
+      for i in 0..<1024 { x[i] = i }
+      count = 1024
+    }
+    // Or more succintly:
+    let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
+  
+    // memcpy data from a data buffer into a tuple after being called via a callback from C.
+    var _cache: (1024 x Int) = ...
+    func callBackForC(_ src: UnsafeMutableBufferPointer<Int>) {
+      precondition(src.size == 1024)
+      _cache = (1024 x Int) { dst: UnsafeMutableBufferPointer<Int> in
+        memcpy(dst.baseAddress!, src.baseAddress!, src.size * MemoryLayout<Int>.stride)
+      }
+    }
+    ```
+  
+  * `init(unsafeUninitializedCapacity: Int, initializingWith initializer: (inout UnsafeMutableBufferPointer<Element>, inout Int) throws -> Void) rethrows`:
+
      This method allows for one to initialize all elements of a tuple with
-     pre-known values avoiding the need to first zero initialize such a tuple:
+     pre-known values, placing the number of elements actually written to in
+     count. After returning, the routine will fill the remaining uninitialized
+     memory with a bad pointer pattern and when asan is enabled will poison the
+     memory. We will follow the same condition's of [Array's version of this method](https://developer.apple.com/documentation/swift/array/3200717-init)
+     around the behavior of the initializedCount parameter. Consider the
+     following examples below of this initializer in action:
 
      ```swift
      // Fill tuple with integral data.
-     let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, count: inout Int) in
-       for i in 0..<1024 { x[i] = i }
-       count = 1024
+     let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, initializedCount: inout Int) in
+       for i in 0..<1000 { x[i] = i }
+       initializedCount = 1000
      }
-     // Or more succintly:
+     precondition(x[1001] == 0xDEADBEEF, "Beef!") // For arguments sake
+     // More succintly:
      let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
-
+  
      // memcpy data from a data buffer into a tuple after being called via a callback from C.
      var _cache: (1024 x Int) = ...
      func callBackForC(_ src: UnsafeMutableBufferPointer<Int>) {
@@ -298,26 +374,17 @@ expressivity in the following ways:
      }
      ```
 
-3. We propose implementing in SILGen a special form of argument to pointer
-   conversion for homogenous tuples that causes the tuple to be converted to
-   `Unsafe[Mutable]Pointer<(T, ..., T)>` to `UnsafeMutablePointer<T>`. This
-   change is layout compatible with tuple layout.
+### Clang Importer Changes:
 
-4. We propose adding a builtin Collection conformance for pure homogenous tuples
-   building upon the work done in `SE-TUPLE_COMPARABLE_HASHABLE`, allowing for
-   users to:
-
-   a. Iterate over the tuple.
-   b. Get the count of the tuple in a programatic matter.
-   c. Use standard algorithms like map, reduce, and filter.
-   d. Apply the full set of Swift's algorithms to the type.
+We propose changing the Clang Importer so that it sets the homogenous bit on all
+fixed size arrays that it imports as homogenous tuples. This will allow for all
+of the benefits from the work above to apply to these types when used in Swift.
 
 ## Detailed design
 
-The main changes to the Swift language itself occurs when parsing/printing
-homogenous tuples:
+In more detail, the specific chains we are suggesting are:
 
-* Homogenous Tuple Span Parsing. This is implemented by changing the tuple
+* Homogenous Tuple Span Parsing. Changing the tuple
   element grammar as follows:
   ```
   parseTypeTupleBody
@@ -335,49 +402,21 @@ homogenous tuples:
       // with all tuple-span-elements having same base type.
       '(' type-homogenous-tuple-span (',' type-homogenous-tuple-span)* ')'
   ```
-  In terms of implementation, we recognize the count and the 'x' when parsing
-  tuple elements. So, given a tuple '(N x T)' where 'N' is an integer literal
-  and 'T' is a type, we perform normal parsing, but:
+  
+  In terms of implementation, we recognize the count and the set product symbol
+  `x` when parsing tuple elements as signaling a homogenous tuple span
+  element. For our purposes here, lets assume we are parsing such a homogenous
+  tuple element of the form `N x Type`. To convert this into its AST form, we
+  add `N` elements of `Type` to the current parent Tuple Type. We also while
+  parsing maintain a bit if all elements of a tuple are the same type. This
+  enables us to use this information to speed up type checking for homogenous
+  tuples written with the new syntax or any tuples that use the old syntax.
 
-  1. In ``Parser::parseTypeTupleBody``, while parsing tuple elements, we
-     maintain additional state: a boolean called `isHomogenousTuple` that tracks
-     if our tuple is a pure homogenous tuple (initialized optimistically to
-     true) and a variable called `expectedHomogenousTupleType` that if non-null
-     is the type of the first homogenous tuple span that we saw while parsing
-     this tuple. This is easy to do in the parser since the method
-     Parser::parseTypeTupleBody parses an entire list of tuple elements at a
-     time using a closure based API, so we can just introduce this state without
-     any effort.
-
-  2. While parsing elements, if we see a non-homogenous tuple span element, we
-     parse normally, but set the bit stating that this tuple is /not/ a pure
-     homogenous tuple.
-
-  3. While parsing elements, if we see a homogenous tuple span element of form
-     `N x Type`:
-
-     a. We first check if `isHomogenousTuple` is still true. In such a case, we
-        check if `expectedHomogenousTupleType` is non-null.
-
-    (i). If `expectedHomogenousTupleType` is null, then we know that we have not
-        seen /any/ homogenous tuple span elements yet and initialize
-        `expectedHomogenousTupleType` to the base type of our
-        homogenous-tuple-span. Then we append `N` elements of type `Type` to our
-        tuple type.
-
-    (ii). If `expectedHomogenousTupleType` is non-null, then we check if the
-        just parsed homogenous tuple element span type matches. If not, we set
-        `isHomogenousTuple` to false. In other case, we then append `N` elements
-        of type `T` to our tuple type.
-
-  4. Once we have finished parsing all tuple body elements, we then check the
-     `isHomogenousTuple` bit. If said bit is set, then we mark our tuple type as
-     possessing this property. This ensures that when we can print out our
-     tuples nicely and when performing type checking only type check a single
-     type element rather than a linear sequence of tuples.
+* In order to change the 
 
 * Homogenous Tuple Types and the ObjC Importer
 
+  Once we have changed the parsing, 
   To change the manner in which we import tuple types, we simply change in
   ImportType.cpp SwiftTypeConverter::VisitConstantArrayType to create a new
   tuple type with the appropriate number of elements and set the is homogenous
