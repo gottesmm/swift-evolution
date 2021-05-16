@@ -22,28 +22,21 @@ incrementally back fill such language support in a manner that makes homogenous
 tuples easier to write and compose better with the rest of the language. The
 specific list of proposed changes are:
 
-a. The addition of sugar for declaring large homogenous tuples. (1), (2).
-
-b. When parsing tuple types, stashing a bit in the tuple type that states if we
++ The addition of sugar for declaring large homogenous tuples. (1), (2).
++ When parsing tuple types, stashing a bit in the tuple type that states if we
    parsed the tuple as a homogenous tuple to allow for improved type checking
    performance and to enable printing of large homogenous tuples with the sugar
    defined by (a). (1), (2).
-
-c. Adding new initializers for homogenous tuples:
-
-   i. A repeating initializer that initializes all elements of the tuple to the same value. (1)
-
-   ii. An unsafe uninitialized memory based initializer similar to Array's. (1)
-
-d. Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
++ Adding new initializers for homogenous tuples:
+   - A repeating initializer that initializes all elements of the tuple to the same value. (1)
+   - An unsafe uninitialized memory based initializer similar to Array's. (1)
++ Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
    as a collection and accessing as contiguous storage. (1) (2)
-
-e. Changing the Clang Importer to import fixed size arrays as sugared homogenous
++ Changing the Clang Importer to import fixed size arrays as sugared homogenous
    tuples and remove the arbitrary limitation on the number of elements (4096
    elements) that an imported fixed size array can have now that type checking
    homogenous tuples is fast. (2)
-
-f. Eliminating the need to use unsafe type pointer punning to pass imported C
++ Eliminating the need to use unsafe type pointer punning to pass imported C
    fixed size arrays to related imported C APIs. (2)
 
 NOTE: (1), (2) is used to notate which use case a specific alpha-numeric list
