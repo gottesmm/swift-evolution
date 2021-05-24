@@ -19,20 +19,20 @@ use these tuples in (non-exclusively) the following contexts:
 There has historically not been much language support specifically for
 homogenous tuples or even tuples in general. In this proposal, we attempt to
 incrementally back fill such language support in a manner that makes homogenous
-tuples easier to write and compose better with the rest of the language. The
-specific list of proposed changes are:
+tuples easier to write and composes better with the rest of the language. The
+specific proposed changes are:
 
-+ The addition of sugar for declaring large homogenous tuples. (1), (2).
++ The addition of the sugar for declaring large homogenous tuples. (1), (2).
 + When parsing tuple types, stashing a bit in the tuple type that states if we
    parsed the tuple as a homogenous tuple to allow for improved type checking
    performance and to enable printing of large homogenous tuples with the sugar
    defined by (a). (1), (2).
 + Adding new initializers for homogenous tuples to ease initialization of
   homogenous tuple fields.
-+ Adding `RandomAccessCollection` and `MutableCollection` conformances to enable usage
-  as a collection and accessing as contiguous storage. (1) (2)
++ Adding `RandomAccessCollection` and `MutableCollection` conformances to enable use
+  of tuple as a collection and access them as contiguous storage. (1) (2)
 + Changing the Clang Importer to import fixed size arrays as sugared homogenous
-   tuples and remove the arbitrary limitation on the number of elements (4096
+   tuples and removing the arbitrary limitation on the number of elements (4096
    elements) that an imported fixed size array can have now that type checking
    homogenous tuples is fast. (2)
 + Eliminating the need to use unsafe type pointer punning to pass imported C
@@ -44,14 +44,14 @@ element above corresponds to.
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
 Swift in a minimal, composable way that helps system/stdlib programmers get
-their job done today in the context where these tuples are already used today.
+their job done in the context where these tuples are already used today.
 
 Swift-evolution thread: [Discussion thread topic for that proposal](https://forums.swift.org/)
 
 ## Motivation
 
 Today in Swift, system programmers use homogenous tuples to represent a fixed
-buffer of bytes of a certain type. An example of this is the SmallString
+buffer of bytes of a certain type. An example of this is the `SmallString`
 implementation in Swift's standard library:
 
 ```swift
@@ -69,17 +69,17 @@ By declaring `_SmallString` as frozen and `_storage` as a homogenous tuple of
 type `UInt64`, we are able to guarantee that `_SmallString` when laid out in
 memory is exactly 128 bits and can be treated as layout compatible with other
 128 bit values, which is totally awesome! That being said, as the number of
-tuple elements increase, using homogenous tuples in this manner does not scale
+tuple elements increases, using homogenous tuples in this manner does not scale
 from a usability and compile time perspective. We explore these difficulties
 below:
 
 ### Problem 1: Large homogenous tuples result in linear type checking behavior
 
-The first issue that naturally comes up is type checker performance. Today, when
-performing type checking, the type checker must type check each tuple element
-specifically to check properties such as if every element of a tuple obeys a
-protocol when inferring if a tuple type is Comparable or Hashable due to
-[SE-0283](0283-tuples-are-equatable-comparable-hashable.md). This can make large
+The first issue that naturally comes up is type checker performance. Today, 
+the type checker considers a tuple (as a whole) to be a sum of its parts, which 
+means that to verify specific properties of a tuple e.g. if it is `Comparable`
+or `Hashable` it has to verify that every element conforms to a required protocol
+due to [SE-0283](0283-tuples-are-equatable-comparable-hashable.md). This can make large
 homogenous tuples incur a significant type checking overhead when being
 used. Tuple in it of themselves are expensive enough already to typecheck as
 shown by the clang importer posessing an artifical limit of 4096 of the number
@@ -104,8 +104,8 @@ struct PointerCache<T> {
 }
 ```
 
-If we want to define an initializer that initializes this tuple to nil, we
-either have to use a Swift source generator or use unsafe code:
+If we want to define an initializer that initializes this tuple to `nil`, we
+either have to use a Swift source generator or write unsafe code:
 
 ```swift
 extension PointerCache {
@@ -131,7 +131,7 @@ extension PointerCache {
 
 If we want to define a Collection conformance for our type, we must wrap our
 tuple in a nominal type and are forced to again use either a Swift source code
-generator or use unsafe code,
+generator or write unsafe code:
 
 ```swift
 extension PointerCache {
@@ -159,7 +159,7 @@ extension PointerCache {
 ```
 
 Even with this, we still are forced to avoid the natural manner of iterating in
-Swift, the for-in loop and instead must iterate by using an index range and
+Swift - the `for-in` loop, and instead must iterate by using an index range and
 subscript into the type:
 
 ```swift
@@ -176,7 +176,7 @@ func printCache(_ p : PointerCache) {
 }
 ```
 
-In all of these cases, the lack of language support add unnecessary complexity
+In all of these cases, the lack of language support adds unnecessary complexity
 to the program for what should be simple primitive operations that should scale
 naturally to larger types without needing us to use unsafe code. Even if we say
 that the unsafe code example is ok, we would be relying on the optimizer to
@@ -215,14 +215,14 @@ being as easy to work with as they should be:
    tuple with more than 4096 elements (see
    [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
    a high level, the type checker is running into the same problem of the
-   programmer: we have made the problem more difficult than it need to be by
+   programmer: we have made the problem more difficult than it needs to be by
    forcing the expression of redundant information in the language.
 
 2. Imported fixed size arrays can not be concisely iterated over due to
-   homogenous tuples lacking a Collection conformance. This makes an operation
+   homogenous tuples lacking a `Collection` conformance. This makes an operation
    that is easy to write in C much harder to perform in Swift since one must
    define a nominal type wrapper and use one of the techniques above from our
-   PointerCache example. As a quick reminder using our imported `MyData_t`, this
+   `PointerCache` example. As a quick reminder using our imported `MyData_t`, this
    is how we could use unsafe code to write our print method:
 
    ```swift
@@ -293,16 +293,16 @@ e.x.:
 This capability is not integral to the proposal and if necessary can be sliced off and
 we can allow only for tuples to only have a single homogenous tuple element.
 
-### Type Checker: Use homogenous tuple bit to decrease time needed to TypeCheck homogenous tuples
+### Type Checker: Use homogenous tuple bit to decrease time needed to type-check homogenous tuples
 
 Today the type checker has to perform a linear amount of work when type checking
 homogenous tuples. This is exascerbated by the comparable/equatable/hashable
 conformances added in
 [SE-0283](0283-tuples-are-equatable-comparable-hashable.md). We can eliminate
 this for large homogenous tuples since when we typecheck we will be able to
-infer that all elements of a tuple that has the homogenous tuple bit set is the
-same, allowing the type checker can just type check the first element of the
-tuple type and use only that for type checking purposes.
+infer that all elements of a tuple that has the homogenous tuple bit set are the
+same, allowing the type checker to just type-check the first element of the
+tuple type and skip the rest.
 
 ### Standard Library/Runtime Improvements:
 
@@ -347,7 +347,7 @@ We propose the following changes to the stdlib/runtime:
 
   * `init(unsafeUninitializedCapacity: Int, initializingWith initializer: (inout UnsafeMutableBufferPointer<Element>, inout Int) throws -> Void) rethrows`:
 
-     This method allows for one to initialize all elements of a tuple with
+     This method allows to initialize all elements of a tuple with
      pre-known values, placing the number of elements actually written to in
      count. After returning, the routine will fill the remaining uninitialized
      memory with either a zero fill or a bad pointer pattern and when asan is enabled will poison the
@@ -395,7 +395,7 @@ In more detail, the specific changes we are suggesting are:
 
   In terms of implementation, we recognize we represent count and the set
   product symbol `x` when parsing tuple elements as signaling a homogenous tuple
-  span element. For our purposes here, lets assume we are parsing such a
+  span element. For our purposes here, let's assume we are parsing such a
   homogenous tuple element of the form `N x Type`. To convert this into its AST
   form, we add `N` elements of `Type` to the current parent Tuple Type. We also
   while parsing maintain a bit if all elements of a tuple are the same
@@ -407,10 +407,10 @@ In more detail, the specific changes we are suggesting are:
   to implement the initializers and teaching name lookup in the type checker how
   to resolve the methods for our tuples.
 
-* The Clang Importer will be modified so that we set the homogenous tuple bit on
-  imported fixed size arrays. This will ensure that we print out the imported
-  tuples in homogenous form and will allow us to lift the 4096 element limit
-  since we will no longer have type checker slow down issues.
+* The Clang Importer will be modified so that it sets the "homogenous tuple" bit on
+  an imported fixed size array. This will ensure that imported tuples are printed out
+  in homogenous form and will allow us to lift the 4096 element limit
+  since we will no longer have type checker performance issues.
 
 * We will implement `RandomAccessCollection` and `MutableCollection`
   conformances for tuples by building upon the builtin conformance work in
@@ -450,8 +450,8 @@ This is additive at the source level so should not effect API resilience.
 
 The main alternative approach considered is the introduction of a new fixed size
 array type rather than extending the tuple type grammar. For the purpose of this
-proposal, we call such a type a NewFixedSizeArray and use the following syntax
-as a straw man: `[5 x Int]`. The main advantage of using NewFixedSizeArray is
+proposal, we call such a type a `NewFixedSizeArray` and use the following syntax
+as a straw man: `[5 x Int]`. The main advantage of using `NewFixedSizeArray` is
 that it allows us to avoid breaking ABI for large tuples since we are just
 introducing new ABI instead. That being said, we trade the lack of an ABI break
 for the following problems:
