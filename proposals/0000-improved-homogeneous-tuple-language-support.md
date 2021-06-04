@@ -269,8 +269,10 @@ performance. This ABI is an artifact of Swift's early evolution where there was
 an attempt to enable tuples to be passed as a function argument list. In such a
 case, destructuring the tuple into arguments makes sense. Moving forward in
 time, that functionality was eliminated from the language so now we are just
-left with an ABI rule that is actively harmful to performance. This performance
-cost is significant enough that users generally avoid large tuples.
+left with an ABI rule that is actively harmful to both compile time and runtime
+performance. The result of these issues together is that people generally do not
+use tuples beyond a certain size. As an example of this, consider the following
+posts by Tony Allevato: [First](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023/11), [Second](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023/40)
 
 ## Proposed solution
 
@@ -455,9 +457,8 @@ programmers what the ClangImporter imported.
 ## Effect on ABI stability
 
 The main effect on ABI stability comes down to whether or not we decide to break
-ABI for large N and if we do so in what way could we mitigate that change.
-
-So my thoughts here is that we really have two possibilities here, remembering that we know if a tuple type was originally a homogenous tuple:
+ABI for large N and if we do decide to do so in what way do we mitigate that
+change.
 
 We could just decide to pick some N that is relatively large and just say
 that we are going to break ABI there. The assumption behind the decision
