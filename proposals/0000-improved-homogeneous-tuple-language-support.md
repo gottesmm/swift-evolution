@@ -1,7 +1,7 @@
-# Improved Language Support for Homogenous Tuples
+# Improved Language Support for Homogeneous Tuples
 
 * Proposal: [SE-NNNN](NNNN-improved-homogenous-tuple-language-support.md)
-  * Author: [Michael Gottesman](https://github.com/gottesmm)
+* Author: [Michael Gottesman](https://github.com/gottesmm)
 * Review Manager: TBD
 * Status: **Awaiting implementation**
 
@@ -22,7 +22,7 @@ manner that makes homogenous tuples easier to write and compose better with the
 rest of the language. The specific list of proposed changes are:
 
 + The addition of sugar for declaring large homogenous tuples.
-+ Introducing a new `HomogenousTuple` protocol. This protocol will
++ Introducing a new `HomogeneousTuple` protocol. This protocol will
   extend `RandomAccessCollection` and `MutableCollection` allowing for
   homogenous tuples to be used as collections and access contiguous storage. It
   will also provide a place for us to declare new helper init methods for
@@ -274,13 +274,13 @@ cost is significant enough that users generally avoid large tuples.
 
 ## Proposed solution
 
-### Syntax Change: Homogenous Tuple Type Sugar
+### Syntax Change: Homogeneous Tuple Type Sugar
 
 We propose a new sugar syntax for a "homogenous tuple span" element. The
 grammar of tuple elements in Swift would be extended as follows:
 
 ```swift
-(5 x Int) -> (Int, Int, Int, Int, Int)
+(5 * Int) -> (Int, Int, Int, Int, Int)
 ```
 
 This sugar is expanded before type checking, so beyond the homogenous bit that
@@ -291,41 +291,40 @@ lists.
 
 ### Standard Library/Runtime Improvements:
 
-We propose the addition of a new protocol called `HomogenousTuple` that all
+We propose the addition of a new protocol called `HomogeneousTuple` that all
 homogenous tuples implicitly conform to:
 
 ```swift
-protocol HomogenousTuple : RandomAccessCollection, MutableCollection {
+protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
+  where
+    // NOTE: This is the default subsequence implementation. We are just making
+    // it explicit in the proposal.
+    SubSequence == Slice<Self>
+  {
+
   /// Used to initialize a tuple with a repeating element. All elements of the tuple will be initialized.
   ///
   /// Example:
   ///
-  /// let x = (128 x Int)(repeating: 0)
-  /// let y = (128 x UnsafePointer<MyDataType>)(repeating: sentinelValue)
+  /// let * = (128 * Int)(repeating: 0)
+  /// let y = (128 * UnsafePointer<MyDataType>)(repeating: sentinelValue)
   init(repeating: repeatedValue: Element)
 
-  /// Initialize all elements of a tuple using a callback initializer. WARNING:
-  /// The closure is expected to initialize all elements of the buffer. Accessing
-  /// ubinitialized memory elements is undefined behavior.
+  /// Initialize all elements of a tuple using a callback that maps an index to
+  /// the value the index must take.
+  ///
+  /// DISCUSSION: This entrypoint allows for the conformance to use in place
+  /// initialization of the tuple memory.
   ///
   /// Example:
   ///
   /// // Fill tuple with integral data.
-  /// let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>) in
-  ///   for i in 0..<1024 { x[i] = i }
+  /// let * = (1024 * Int) { (index: Index) -> Int in
+  ///   return index
   /// }
   /// // Or more succintly:
-  /// let x = (1024 x Int) { for i in 0..<1024 { $0[i] = i } }
-  /// 
-  /// // memcpy data from a data buffer into a tuple after being called via a callback from C.
-  /// var _cache: (1024 x Int) = ...
-  /// func callBackForC(_ src: UnsafeMutableBufferPointer<Int>) {
-  ///   precondition(src.size == 1024)
-  ///   _cache = (1024 x Int) { dst: UnsafeMutableBufferPointer<Int> in
-  ///     memcpy(dst.baseAddress!, src.baseAddress!, src.size * MemoryLayout<Int>.stride)
-  ///   }
-  /// }
-  init(initializingWith initializer: (UnsafeMutableBufferPointer<Element>) throws -> Void) rethrows
+  /// let * = (1024 * Int) { $0 }
+  init(initializingWith initializer: (Index) throws -> Element) rethrows
 
   /// Initialize all elements of a tuple with pre-known values, placing the
   /// number of elements actually written to in count. After returning, the
@@ -337,13 +336,12 @@ protocol HomogenousTuple : RandomAccessCollection, MutableCollection {
   /// Example:
   ///
   ///   // Fill tuple with integral data.
-  ///   let x = (1024 x Int) { (buffer: UnsafeMutableBufferPointer<Int>, initializedCount: inout Int) in
+  ///   let * = (1024 * Int) { (buffer: UnsafeMutableBufferPointer<Int>, initializedCount: inout Int) in
   ///     for i in 0..<1000 { x[i] = i }
   ///     initializedCount = 1000
   ///   }
   ///   precondition(x[1001] == 0, "Zero init!") // For arguments sake
   init(unsafeUninitializedCapacity: Int, initializingWith initializer: (inout UnsafeMutableBufferPointer<Element>, inout Int) throws -> Void) rethrows
-
 }
 ```
 
@@ -359,7 +357,6 @@ of the benefits from the work above to apply to these types when used in Swift.
 
 In order to prase homogenous tuple spans, we modify the swift grammar as follows:
 ```
-  set-product: 'x'
   type-tuple:
     '(' type-tuple-body? ')'
   type-tuple-body:
@@ -368,8 +365,10 @@ In order to prase homogenous tuple spans, we modify the swift grammar as follows
     identifier? identifier ':' type
     type
     type-homogenous-tuple-span
+  integer_literal_gt_one:
+    [2-9][0-9]*
   type-homogenous-tuple-span:
-    integer_literal set-product type
+    integer_literal_gt_one '*' type
   type-pure-homogenous-tuple:
     '(' type-homogenous-tuple-span ')'
 ```
@@ -378,7 +377,13 @@ When we parse a tuple that consists of a single homogenous tuple span element,
 we set in the tuple type a homogenous tuple bit using spare bits already
 available in the tuple type.
 
-### Type Checker: Reduce number of Type variables for Homogenous Tuples
+NOTE: We specifically ban homogenous tuple spans that provide an integer literal
+of 0 or 1. The reason for this is that given that Swift's generics do not
+support variadics or type level integers, having homogeneous tuples of size 0, 1
+are not useful. Instead we require our users to use an empty tuple or just an
+element.
+
+### Type Checker: Reduce number of Type variables for Homogeneous Tuples
 
 The type checker today creates a type variable for all tuple elements when
 solving constraints since any element of the tuple could be different. But if
@@ -389,7 +394,7 @@ merging heuristic:
 
 ```
 // We know that all of these must be the same type, so we can provide the type checker with that constraint info.
-let x: (3 x Int) = (1, 2, 3)
+let x: (3 * Int) = (1, 2, 3)
 ```
 
 ### Type Checker: Use homogenous tuple bit to decrease type checking when comparing, equating, and hashing homogenous tuples
@@ -403,7 +408,7 @@ infer that all elements of a tuple that has the homogenous tuple bit set is the
 same, allowing the type checker can just type check the first element of the
 tuple type and use only that for type checking purposes.
 
-### HomogenousTuple protocol
+### HomogeneousTuple protocol
 
 This will be implemented following along the lines of the
 ``ExpressibleBy*Literal`` protocols except that we will not allow for user
@@ -453,7 +458,7 @@ This is additive at the source level so should not effect API resilience.
 The main alternative approach considered is the introduction of a new fixed size
 array type rather than extending the tuple type grammar. For the purpose of this
 proposal, we call such a type a NewFixedSizeArray and use the following syntax
-as a straw man: `[5 x Int]`. The main advantage of using NewFixedSizeArray is
+as a straw man: `[5 * Int]`. The main advantage of using NewFixedSizeArray is
 that it allows us to fix some ABI issues around tail padding (see footnote 1
 below). That being said, we trade this ABI improvement for the following
 problems:
@@ -496,7 +501,7 @@ struct MyState {
 }
 ```
 
-This means that `(2 x MyState)` would have a size of `16 + 9 = 25` instead of
+This means that `(2 * MyState)` would have a size of `16 + 9 = 25` instead of
 `16 + 16 = 32` like one may expect if one were considering a fixed size
 array from C. As another example of this, consider if we made a `MyPair` that
 contains a `MyState`:
@@ -516,8 +521,8 @@ to need a whole additional byte to satisfy the alignment. In contrast in Swift,
 Now lets take a look at how this plays with homogenous tuples stored in structs:
 
 ```swift
-struct MyHomogenousTuplePair {
-  var states: (2 x MyState)
+struct MyHomogeneousTuplePair {
+  var states: (2 * MyState)
   var b: Int8
 }
 ```
@@ -526,7 +531,7 @@ If we wanted to load from `states.1`, we would need to load bytes `(16,32]` and
 then mask out bytes `(25,32]`.
 
 Luckily for us we import all C types (including tuples) as having the same
-size/stride. So if `(2 x MyState)` was a fixed size array imported from C, we
+size/stride. So if `(2 * MyState)` was a fixed size array imported from C, we
 would not have these issues. The issue is only for Swift types.
 
 ## Acknowledgments
