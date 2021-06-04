@@ -345,6 +345,9 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
 }
 ```
 
+Importantly notice that we are defining the Subsequence associated type to be
+the default subsequence type (a slice on top of Self).
+
 ### Clang Importer Changes:
 
 We propose changing the Clang Importer so that it sets the homogenous bit on all
@@ -417,7 +420,14 @@ with the homogenous tuple bit set preventing bad type checker performance. This
 will additionally let us implement the protocol's functionality by using a
 default implementation and using that default implementation for all
 tuples. This default implementation in practice will just be a trampoline into
-the c++ runtime.
+the c++ runtime. Since this is a protocol, we nautrally will allow for users to
+use the protocol as an extension and a generic requirement, e.x.:
+
+```
+func myHomogenousTupleFunc<T : HomogeneousTuple>(...) { ... }
+
+extension X where Y : HomogenousTuple { ... }
+```
 
 ### Clang Importer Changes
 
@@ -444,10 +454,59 @@ programmers what the ClangImporter imported.
 
 ## Effect on ABI stability
 
-The main effect on ABI stability would be additive since the change in tuple ABI
-would only affect functions that have explicit homogenous tuples as arguments,
-results and we can provide thunks when needed to convert in between the
-representations.
+The main effect on ABI stability comes down to whether or not we decide to break
+ABI for large N and if we do so in what way could we mitigate that change.
+
+So my thoughts here is that we really have two possibilities here, remembering that we know if a tuple type was originally a homogenous tuple:
+
+We could just decide to pick some N that is relatively large and just say
+that we are going to break ABI there. The assumption behind the decision
+would be that at a certain point (as mentioned by Tony here:
+[Pitch] Improved Compiler Support for Large Homogenous Tuples - #40 by allevato)
+the compile time becomes so large and the runtime so poor that no one really
+would use such a type. That being said, just saying that no one uses such a
+large tuple is (IMO) not caring about the experience of the developer who
+runs into this. With that in mind, I think we would need mitigations in place
+to do this and also would need to develop some tooling/apply it to the source
+compatibility suite and other user software to get an idea of what N would be
+appropriate. I'll lay out my thoughts on the mitigations below.
+
+We could change the way we lowered homogenous tuples such that if we are
+calling a function with a homogenous tuple argument, we use the more
+efficient ABI. We also probably could for new enough deployment target maybe
+have a way for protocols to opt into it. We would need thunks to allow for
+backwards deployment and I am not sure if core protocols could use the new
+ABI. Instead I think the only thing we could hope for is that if we can
+devirtualize, we might be able to inline away the different convention by
+marking the thunks as transparent. That being said, if we were calling into
+generic code, we would still hit this. That being said, this avoids the ABI
+break but is unfortunate in its complexity and limitations.
+
+Implementation/Mitigations for Option 1 ABI Break
+
+In terms of the ABI break, my thought is that we can do it a reasonable way by:
+
+Introducing a flag that would control whether or not we use the new or old
+tuple ABI. This flag would be serialized into the swift interface files of all
+stabilized swift libraries. The lack of such an option specified in the
+interface file will signal to the compiler that a library was compiled with
+the old tuple ABI. In the case, assuming that the current compilation does
+have the flag set, we could:
+
+Emit a hard error and tell the user that the library needs to be recompiled.
+Infer that we should use the old ABI instead of the new ABI for the current
+compilation. In this case, we would emit a warning that we are doing this
+stating that in a subsequent swift version this will be a hard error. If we
+find dependencies with a mix of old/new ABIs we would just error.
+If the new ABI flag is passed in (or given a new enough deployment target), we
+would still allow for specific functions to be marked with an attribute that
+forces the function to use the old tuple ABI for compatibility reasons to help
+upgrade code.
+
+In order to not force the optimizer to support multiple representations, we
+would move the implementation of the destructuring to a late IRGen pass or to
+IRGen and would have the flag control whether or not the tuple destructuring
+occurs at that point.
 
 ## Effect on API resilience
 
