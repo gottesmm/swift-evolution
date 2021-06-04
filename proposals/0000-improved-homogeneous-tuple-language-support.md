@@ -52,7 +52,7 @@ Today in Swift, system programmers use homogenous tuples when working with
 imported fixed size C-arrays and when defining a fixed buffer of bytes of a
 certain type. As a quick example, consider the following C struct,
 
-```swift
+```c
 typedef struct {
   int versionDigits[3];
 } MyVersionInfo_t;
@@ -395,7 +395,7 @@ have a homogenous tuple, we can introduce a join constraint on all of the tuple
 elements allowing the constraint solver to be more efficient via the use of its
 merging heuristic:
 
-```
+```swift
 // We know that all of these must be the same type, so we can provide the type checker with that constraint info.
 let x: (3 * Int) = (1, 2, 3)
 ```
@@ -423,7 +423,7 @@ tuples. This default implementation in practice will just be a trampoline into
 the c++ runtime. Since this is a protocol, we nautrally will allow for users to
 use the protocol as an extension and a generic requirement, e.x.:
 
-```
+```swift
 func myHomogenousTupleFunc<T : HomogeneousTuple>(...) { ... }
 
 extension X where Y : HomogenousTuple { ... }
