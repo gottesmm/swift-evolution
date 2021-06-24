@@ -35,9 +35,9 @@ rest of the language. The specific list of proposed changes are:
   homogenous tuples is fast.
 + Eliminating the need to use unsafe type pointer punning to pass imported C
   fixed size arrays to related imported C APIs.
-+ Changing the Swift calling convention ABI of sufficiently large tuples to
-  allow for them to be passed as an aggregate rather than aggressively
-  destructuring the tuple into individual arguments.
++ Changing the Swift calling convention ABI for all tuples of size 7 or larger
+  such that the tuples are passed as an aggregate rather than being eagerly
+  destructured into individual arguments.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
@@ -260,7 +260,7 @@ issue for homogenous tuples by taking advantage of the extra semantic
 information we have from the syntax to just use the type of the first tuple
 element to perform the type checking.
 
-### Problem 4: Passing/returning large homogenous tuples is inefficient
+### Problem 4: Swift's Tuple ABI does not scale well at compile
 
 Today Swift's ABI possesses a rule that all tuples are eagerly destructured at
 all costs. This means that if one were to pass a 1024 element tuple as an
@@ -271,8 +271,47 @@ case, destructuring the tuple into arguments makes sense. Moving forward in
 time, that functionality was eliminated from the language so now we are just
 left with an ABI rule that is actively harmful to both compile time and runtime
 performance. The result of these issues together is that people generally do not
-use tuples beyond a certain size. As an example of this, consider the following
-posts by Tony Allevato: [First](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023/11), [Second](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023/40)
+use tuples beyond a certain size since such code does not scale well. As an
+example, consider the following "scale file test":
+
+```
+struct Foo {
+  var value: (
+% for i in range(0, N*100):
+  Int,
+% end
+  Int
+  ) = (
+% for i in range(0, N*100):
+   0,
+% end
+   0)
+}
+
+@inline(never)
+public func trampoline<T>(_ t: T) -> T { t }
+
+func main() {
+    let f = Foo()
+    trampoline(f.value)
+}
+
+main()
+```
+
+Using this and the scale test utility in Swift's repo, one can see that as we
+increase tuple argument size:
+
++ -Onone,-O total compilation wall time is quadratic [O(n^2)]
++ -Onone,-O type checker compilation wall time is quadratic [O(n^2)]
++ -Onone,-O code size is linear O(n).
++ -Onone,-O compilation memory usage
++ -Onone,-O runtime memory usage
++ -Onone,-O runtime is ...
+
+### Problem 5: Swift's Calling Convention Tuple ABI does not scale well at runtime for large tuples
+
+This can be seen by looking at our previous scale test example.
 
 ## Proposed solution
 
@@ -438,13 +477,15 @@ imported fixed size arrays. This will ensure that we print out the imported
 tuples in homogenous form and will allow us to lift the 4096 element limit since
 we will no longer have type checker slow down issues.
 
-### Improved Tuple ABI of Swift's Calling Convention
+### Improve Scalability of Swift's Calling Convention Tuple ABI for Tuple with more than 6 elements
 
-We propose that we change Swift's calling convention so that a function that
-takes a homogenous tuple will have the new ABI. Easily, if we pass the
-homogenous tuple to a function with the normal ABI we can just destructure it
-and can provide a thunk for the old tuple ABI if we ever pass a non-homogenous
-tuple as an argument and or result of a homogenous tuple API.
+We propose that we change the Tuple ABI of Swift's calling convention for all
+new swift code where a Tuple has size > 6. This will fix scalability problems
+in the compiler (as shown by the quadratic behavior above) and improve
+performance for any code written with legacy code recompiled with the newer
+compiler as well as any code written to use large homogeneous tuples. We
+describe how we handle breaking the ABI incrementally and why we chose 6 in the
+ABI stability section below.
 
 ## Source compatibility
 
@@ -456,58 +497,97 @@ programmers what the ClangImporter imported.
 
 ## Effect on ABI stability
 
+The main effect on ABI stability of this proposal is the tuple ABI break. We
+first describe how we decided that the cut off point where the new ABI should
+start is 7. Then we will analyze the ABI implications of the change. Finally we
+will lay out a methodology based on attributes/tooling that will allow for
+stabilized library authors to incrementally update their libraries to use the
+new tuple ABI when they are able to guarantee that down stream clients will not
+break.
+
+### Why break ABI when a tuple has N == 7 elements vs some other N
+
+The author's came up with the number 7 by applying a modified version of
+[swift-ast-script]([https://github.com/gottesmm/swift/tree/ast-script-for-tuples]
+to print out the size of all tuple arguments and results in swift interface
+files passed in on the command line. The author then applied this tool to all
+swift interface files in Xcode (the version used to compile swift today). The
+gathered data is here: []. As one can see most stabilzied frameworks use only
+1-2 element tuples. The two exceptions are the Swift standard library which has
+a max tuple size of 6 and Foundation which has a max tuple size of 32.
+
+The data gathered is available here: . As one can see, except for Foundation, 
+
+A natural question is why are the authors suggesting that we do the ABI break
+when a tuple has 7 elements instead of some other N.
+
+This is because the authors developed a tool that enabled 
+
+
+calling convention ABI break. The authors believe that since large tuples are
+not used often that breaking the ABI for tuples with 7 or more elements can be
+accomplished in an incremental way, moving the ecosystem forward and eliminating
+a non-scalable part of the ABI that is now vestigal and unneeded. The way that the authors came up with the 6 element number is that 
+
+As with any proposed ABI break we first present data about how many
+stabilized binaries will break given that we chose 
+
 The main effect on ABI stability comes down to whether or not we decide to break
 ABI for large N and if we do decide to do so in what way do we mitigate that
-change.
+change. We believe that we can avoid having a major ABI break problem by taking
+the following steps:
 
-We could just decide to pick some N that is relatively large and just say
-that we are going to break ABI there. The assumption behind the decision
-would be that at a certain point (as mentioned by Tony here:
-[Pitch] Improved Compiler Support for Large Homogenous Tuples - #40 by allevato)
-the compile time becomes so large and the runtime so poor that no one really
-would use such a type. That being said, just saying that no one uses such a
-large tuple is (IMO) not caring about the experience of the developer who
-runs into this. With that in mind, I think we would need mitigations in place
-to do this and also would need to develop some tooling/apply it to the source
-compatibility suite and other user software to get an idea of what N would be
-appropriate. I'll lay out my thoughts on the mitigations below.
++ All code compiled by a new-ABI compiler will be emitted with the new tuple ABI
+  unless explicitly marked in source with a new attribute called
+  `@_eagerlyDestructuredTupleABI`. This attribute will cause the compiler to
+  emit binary code with the old ABI and can be used by frameworks to ensure that
+  specific APIs that are in use and are not ready to be migrated can still use
+  the old ABI and thus not break their ABI. We also will provide a flag that
+  stabilized libraries can use to opt in to their entire library using the old
+  ABI to ease migration. All of these together will ensure that library authors
+  can have flexibility/control over when the ABI break will occur and allow for
+  incremental migration.
 
-We could change the way we lowered homogenous tuples such that if we are
-calling a function with a homogenous tuple argument, we use the more
-efficient ABI. We also probably could for new enough deployment target maybe
-have a way for protocols to opt into it. We would need thunks to allow for
-backwards deployment and I am not sure if core protocols could use the new
-ABI. Instead I think the only thing we could hope for is that if we can
-devirtualize, we might be able to inline away the different convention by
-marking the thunks as transparent. That being said, if we were calling into
-generic code, we would still hit this. That being said, this avoids the ABI
-break but is unfortunate in its complexity and limitations.
++ new-ABI compilers will be taught to infer that all tuples imported from a
+  stabilized swift interface file will use the destructured tuple ABI unless
+  explicitly marked with a new attribute called
+  `@_nonDestructuredTupleABI`. This will have the effect that all stabilized
+  interface files produced by an old-ABI compiler will still be readable by a
+  new-ABI compiler and will use the correct old-ABI. It also will ensure that
+  old-ABI compilers will be unable to compile against stabilized libraries that
+  are using the new ABI since the old-ABI compiler will not recognize the new
+  `@_nonDestructureTupleABI` attribute and will error.
 
-Implementation/Mitigations for Option 1 ABI Break
+The compiler will when creating a swift interface file for new code will
+automatically for the user place the `@_nonDestructuredTupleABI` attribute
+unless the user marked the function with the `@_eagerlyDestructuredTupleABI` or
+if the user passes in a specific option that says
 
-In terms of the ABI break, my thought is that we can do it a reasonable way by:
+The effect of this at compile time will be:
 
-Introducing a flag that would control whether or not we use the new or old
-tuple ABI. This flag would be serialized into the swift interface files of all
-stabilized swift libraries. The lack of such an option specified in the
-interface file will signal to the compiler that a library was compiled with
-the old tuple ABI. In the case, assuming that the current compilation does
-have the flag set, we could:
++ Old compilers compiling against a stabilized swift interface file produced by
+  an old compiler will succeed in compilation.
 
-Emit a hard error and tell the user that the library needs to be recompiled.
-Infer that we should use the old ABI instead of the new ABI for the current
-compilation. In this case, we would emit a warning that we are doing this
-stating that in a subsequent swift version this will be a hard error. If we
-find dependencies with a mix of old/new ABIs we would just error.
-If the new ABI flag is passed in (or given a new enough deployment target), we
-would still allow for specific functions to be marked with an attribute that
-forces the function to use the old tuple ABI for compatibility reasons to help
-upgrade code.
++ Old compilers that compile against a stabilized interface file produced by a
+  newer compiler will fail to compile if the new compiler marks any functions as
+  using the `@_eagerlyDestructuredTupleABI` that has some APIs that use the new
+  tuple ABI will fail to compile since the compiler will not recognize the
+  attribute and will error.
 
-In order to not force the optimizer to support multiple representations, we
-would move the implementation of the destructuring to a late IRGen pass or to
-IRGen and would have the flag control whether or not the tuple destructuring
-occurs at that point.
++ New compilers that compile against a stabilized interface file produced by an
+  older compiler will succeed and produce a binary that uses the old eagerly
+  destructured ABI since no APIs will be marked with
+  `@_nonDestructuredTupleABI`.
+
++ New compilers that compile against a stabilized interface file produced by a
+  newer compiler will succeed and be able to take advantage of all of the APIs
+  that are marked as `@_nonDestructuredTupleABI` by the emitting compiler.
+
+The effect of this in terms of backwards deployment are as follows (noting that
+we use old/new binary to refer to binaries compiled with either the old/new
+tuple ABI):
+
++ If an old ABI executable links against a new ABI executable
 
 ## Effect on API resilience
 
