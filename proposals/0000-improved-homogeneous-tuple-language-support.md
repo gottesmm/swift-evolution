@@ -15,13 +15,13 @@ T)`) in contexts such as:
 
 1. Writing code that uses an imported C fixed size array in Swift.
 2. Defining a Swift nominal type that uses a homogenous tuples to represent a
-   field with a fixed layout of bytes (e.x.: SmallString)
+   field with a fixed layout of bytes (e.x.: `SmallString`)
 
 In this proposal, we attempt to improve language support for such tuples in a
 manner that makes homogenous tuples easier to write and compose better with the
 rest of the language. The specific list of proposed changes are:
 
-+ The addition of sugar for declaring large homogenous tuples.
++ The addition of syntactic sugar for declaring large homogenous tuples.
 + Introducing a new `HomogeneousTuple` protocol. This protocol will
   extend `RandomAccessCollection` and `MutableCollection` allowing for
   homogenous tuples to be used as collections and access contiguous storage. It
@@ -35,9 +35,9 @@ rest of the language. The specific list of proposed changes are:
   homogenous tuples is fast.
 + Eliminating the need to use unsafe type pointer punning to pass imported C
   fixed size arrays to related imported C APIs.
-+ Changing the Swift calling convention ABI for all tuples of size 7 or larger
-  such that the tuples are passed as an aggregate rather than being eagerly
-  destructured into individual arguments.
++ Changing the Swift calling convention ABI to pass all tuples with 7 or more
+  elements as aggregates rather than as eagerly destructured arguments and
+  results.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
