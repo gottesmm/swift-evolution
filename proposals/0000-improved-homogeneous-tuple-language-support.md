@@ -35,9 +35,10 @@ rest of the language. The specific list of proposed changes are:
   homogenous tuples is fast.
 + Eliminating the need to use unsafe type pointer punning to pass imported C
   fixed size arrays to related imported C APIs.
-+ Changing the Swift calling convention ABI to pass all tuples with 7 or more
-  elements as aggregates rather than as eagerly destructured arguments and
-  results.
++ Changing the Swift calling convention ABI to no longer eagerly destructure
+  tuples with 7 or more elements as aggregates instead of eagerly destructuring
+  the tuples into individual elements. The calling convention ABI for tuples
+  with less than 7 elements will not be modified.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
