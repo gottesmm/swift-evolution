@@ -34,8 +34,11 @@ rest of the language. The specific list of proposed changes are:
   tuples and remove the arbitrary limitation on the number of elements (4096
   elements) that an imported fixed size array can have now that type checking
   homogeneous tuples is fast.
-+ Eliminating the need to use unsafe type pointer punning to pass imported C
-  fixed size arrays to imported C APIs using the `&` operator.
++ Change the `&` operator to allow for fixed size C arrays imported as
+  homogeneous tuples to be passed to imported C APIs that expect to be able to
+  take fixed size array arguments via Array To Pointer decay. This will be done
+  by converting the tuple to an UnsafePointer of N elements of type T instead of
+  an UnsafePointer of one tuple of N elements.
 + Changing the Swift calling convention ABI to pass tuples with 7 or more
   elements as aggregates instead of destructuring the tuple into separate
   arguments and return values. The calling convention ABI for tuples with less
