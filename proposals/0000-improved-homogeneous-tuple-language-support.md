@@ -194,21 +194,22 @@ struct MyData_t {
 void printFloatData(UnsafePointer<Float>);
 ```
 
-Currently, common operations one performs on such a fixed size array can not be
-performed in idiomatic Swift without resorting to a code generator or unsafe
+Currently, common idiomatic operations one performs on such a fixed size array
+in C do not have an equivalent expression in idiomatic Swift. Instead the
+programmar must resort to the use of a code generator or unsafe
 code. Additionally, there are artificial limitations imposed by the Clang
 Importer on importable code. We go through each of the issues below:
 
 #### Problem 2a: Imported Fixed size C arrays can not be iterated over due to missing Collection conformance
 
-A common task when working with fixed size arrays in C is to iterate over the
-contents of a fixed size array. When fixed size C arrays are imported into Swift
-as a homogeneous tuple, one can not idiomatically iterate over the C array's
-homogeneous tuple representation since homogeneous tuples do not have a
-Collection conformance. Instead, one must use unsafe code by defining a nominal
-type wrapper and use one of the techniques above from our `PointerCache`
-example. As a quick reminder using our imported `MyData_t`, this is how we could
-use unsafe code to write our print method:
+One of the most basic tasks when working with fixed size arrays in C is to
+iterate over the contents of a fixed size array. When fixed size C arrays are
+imported into Swift as a homogeneous tuple, one can not idiomatically iterate
+over the C array's homogeneous tuple representation since homogeneous tuples do
+not have a Collection conformance. Instead, one must use unsafe code by defining
+a nominal type wrapper and use one of the techniques above from our
+`PointerCache` example. As a quick reminder using our imported `MyData_t`, this
+is how we could use unsafe code to write our print method:
 
 ```swift
 extension MyData_t {
@@ -253,7 +254,9 @@ of memory containing `N` float contiguously:
      }
    }
 ```
+
 To make this example work, we must write instead the following verbose code to satisfy the type checker:
+
 ```swift
   extension MyData_t {
     func cPrint() {
@@ -299,7 +302,7 @@ performance. The result of these issues together is that people generally do not
 use tuples beyond a certain size since such code does not scale well. As an
 example, consider the following "scale file test":
 
-```
+```swift
 struct Foo {
   var value: (
 % for i in range(0, N*100):
