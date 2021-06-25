@@ -537,7 +537,7 @@ break.
 ### Why break ABI when a tuple has N == 7 elements vs some other N
 
 The author's came up with the number 7 by applying a modified version of
-[swift-ast-script]([https://github.com/gottesmm/swift/tree/ast-script-for-tuples]
+[swift-ast-script](https://github.com/gottesmm/swift/tree/ast-script-for-tuples)
 to print out the size of all tuple arguments and results in swift interface
 files passed in on the command line. The author then applied this tool to all
 swift interface files in Xcode (the version used to compile swift today). The
