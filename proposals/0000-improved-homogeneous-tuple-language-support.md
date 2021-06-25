@@ -173,7 +173,7 @@ able to guarantee certain performance constraints. This generally forces the
 programmer to look at the assembly to guarantee that the optimizer optimized the
 unsafe code as the programmer expected, an unfortunate outcome.
 
-### Problem 2: Fixed size C array types imported as Homogeneous Tuples do not compose with imported C constructs using said types
+### Problem 2: Fixed size C array types imported as Homogeneous Tuples do not compose with idiomatic Swift or imported C functions that take fixed size arrays
 
 The Clang Importer today imports C fixed size arrays into Swift as homogenous
 tuples. For instance, the following C:
