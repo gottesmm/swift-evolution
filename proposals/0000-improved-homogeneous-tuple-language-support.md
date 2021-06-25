@@ -224,7 +224,7 @@ extension MyData_t {
 }
 ```
 
-#### Problem 2b: Imported C APIs that assume Array To Pointer Decay can not be used with corresponding Imported Type with Safe code
+#### Problem 2b: Imported C APIs that assume Array To Pointer Decay of a Fixed Size Array can not be called without using unsafe code
 
 In C, we would be able to write the following code to pass our data buffer into
 `printFloatData` due to fixed size arrays decaying to pointers:
