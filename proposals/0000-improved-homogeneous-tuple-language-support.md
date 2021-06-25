@@ -173,7 +173,7 @@ able to guarantee certain performance constraints. This generally forces the
 programmer to look at the assembly to guarantee that the optimizer optimized the
 unsafe code as the programmer expected, an unfortunate outcome.
 
-### Problem 2: Fixed size C arrays imported as large Tuples do not compose with general Swift language features and other imported C constructs
+### Problem 2: Fixed size C arrays imported as Homogeneous Tuples do not compose with general Swift language features and other imported C constructs
 
 The Clang Importer today imports C fixed size arrays into Swift as homogenous
 tuples. For instance, the following C:
@@ -273,7 +273,7 @@ The ClangImporter due to limitations in the compiler around large homogenous
 tuples will not import a fixed size array if the array would be imported as a
 tuple with more than 4096 elements (see
 [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
-a high level, the type checker is running into the same problem of the
+a high level, the compiler seems to be running into the same problem of the
 programmer: we have made the problem more difficult than it need to be by
 forcing the expression of redundant information in the language.
 
@@ -284,11 +284,12 @@ conform to Equatable, Hashable, and Comparable if all of the elements of such a
 tuple also conform to those protocols. This increased language expressiveness at
 the expense of requiring the type checker to perform linear work for such pieces
 of code since the type checker must prove that all elements of the tuple
-individually possess such conformances. This linear work is ok for small tuples,
-but for large homogeneous tuples, the work becomes significantly more expensive
-if one compares, hashes, or equates homogeneous tuples in a large code base.
+individually possess such conformances. This linear work is ignorable for small
+tuples, but for large homogeneous tuples, the work becomes significantly more
+expensive if one compares, hashes, or equates homogeneous tuples in a large code
+base.
 
-### Problem 4: Swift's Tuple ABI does not scale well for large Tuples
+### Problem 4: Swift's Tuple ABI does not scale well at compile and runtime for large Tuples
 
 Today Swift's ABI possesses a rule that all tuples are eagerly destructured at
 all costs. This means that if one were to pass a 1024 element tuple as an
@@ -335,7 +336,7 @@ increase tuple argument size:
 + -Onone,-O code size is linear O(n).
 
 On the author's computer (2019 Macbook Pro), when N = 4096, a near trunk
-compiler takes ~30 seconds to compile a piece of code that should be instant.
+compiler takes ~25 seconds to compile a piece of code that should be instant.
 
 ## Proposed solution
 
@@ -413,13 +414,13 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
 Importantly notice that we are defining the Subsequence associated type to be
 the default subsequence type (a slice on top of Self).
 
-### Clang Importer Change: Import Fixed Size Arrays as Homogeneous Tuples
+### Clang Importer Change: Import Fixed Size Arrays as Sugared Homogeneous Tuples
 
 We propose changing the Clang Importer so that it sets the homogenous bit on all
 fixed size arrays that it imports as homogenous tuples. This will allow for all
 of the benefits from the work above to apply to these types when used in Swift.
 
-### Language Change: Add Argument To Pointer Conversion to convert UnsafePointer<(N x Int)> to UnsafePointer<Int>
+### Language Change: Add Argument To Pointer Conversion to convert UnsafePointer<(N x T)> to UnsafePointer<T> if T is an imported C type being passed to an imported C api.
 
 We propose adding a new Argument to Pointer conversion to enable users who
 import fixed size arrays from C as homogeneous tuples to pass such tuples to C APIs that when imported expect the fixed size array to have gone through 
