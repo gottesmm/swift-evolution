@@ -200,7 +200,7 @@ programmar must resort to the use of a code generator or unsafe
 code. Additionally, there are artificial limitations imposed by the Clang
 Importer on importable code. We go through each of the issues below:
 
-#### Problem 2a: Imported Fixed size C arrays can not be iterated over due to missing Collection conformance
+#### Problem 2a: Imported Fixed size C arrays can not be iterated over due to lacking Collection conformance
 
 One of the most basic tasks when working with fixed size arrays in C is to
 iterate over the contents of a fixed size array. When fixed size C arrays are
