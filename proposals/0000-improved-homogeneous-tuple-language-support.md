@@ -21,14 +21,15 @@ In this proposal, we attempt to improve language support for such tuples in a
 manner that makes homogeneous tuples easier to write and compose better with the
 rest of the language. The specific list of proposed changes are:
 
-+ The addition of syntactic sugar for declaring large homogeneous tuples.
-+ Introducing a new `HomogeneousTuple` protocol. This protocol will
-  extend `RandomAccessCollection` and `MutableCollection` allowing for
-  homogeneous tuples to be used as collections and access contiguous storage. It
-  will also provide a place for us to declare new helper init methods for
-  initializing homogeneous tuple memory, allow us to expose the count of a tuple
-  type, and also allow us to implement using default protocol implementations.
-  We will only allow for homogeneous tuples to conform to this, not user types.
++ The addition of syntactic sugar for declaring homogeneous tuples to ease
+  declaring large homogeneous tuples
++ Introducing a new `HomogeneousTuple` protocol. This protocol will extend
+  `RandomAccessCollection` and `MutableCollection` allowing for homogeneous
+  tuples to be used as collections and access contiguous storage. It will also
+  provide a place for us to declare new helper init methods for initializing
+  homogeneous tuple memory, allow us to expose the count of a tuple type, and
+  will be implemented in a mix of the standard library and runtime.  We will
+  only allow for homogeneous tuples to conform to this, not user types.
 + Changing the Clang Importer to import fixed size arrays as sugared homogeneous
   tuples and remove the arbitrary limitation on the number of elements (4096
   elements) that an imported fixed size array can have now that type checking
