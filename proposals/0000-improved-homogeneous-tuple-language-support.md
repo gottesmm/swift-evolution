@@ -6,7 +6,7 @@
 * Status: **Awaiting implementation**
 
 * Reference: [SE-0283](0283-tuples-are-equatable-comparable-hashable.md)
-* Pitch Thread 1: [https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuple](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuple)
+* Pitch Thread 1: [https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023)
 
 ## Introduction
 
