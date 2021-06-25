@@ -21,8 +21,8 @@ In this proposal, we attempt to improve language support for such tuples in a
 manner that makes homogeneous tuples easier to write and compose better with the
 rest of the language. The specific list of proposed changes are:
 
-+ The addition of syntactic sugar for declaring homogeneous tuples to ease
-  declaring large homogeneous tuples
++ The addition of syntactic sugar for declaring homogeneous tuples easing the
+  declaration of large tuples.
 + Introducing a new `HomogeneousTuple` protocol. This protocol will extend
   `RandomAccessCollection` and `MutableCollection` allowing for homogeneous
   tuples to be used as collections and access contiguous storage. It will also
