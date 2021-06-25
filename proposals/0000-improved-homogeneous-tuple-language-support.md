@@ -438,6 +438,17 @@ corresponding imported C apis in nice idiomatic Swift:
    }
 ```
 
+### ABI Break: Pass Tuples with 7 or more elements as a tuple aggregate instead of eagerly destructuring
+
+This would cause us to pass tuples with 7 or more elements indirectly as an
+entire aggregate rather than passing the tuple as individual destructured
+values. This will eliminate the poor compile time performance of the compiler
+when compiling such code and the runtime performance of such code. We discuss
+the ABI break below in the ABI difference section with a detailed analysis upon
+what ABI incompatibilities we can expect and what methodology/tooling we will
+provide so that the ABI break can be done incrementally at the leasure of
+the relevant ABI stable library's author.
+
 ## Detailed design
 
 ### Grammar Change: Add support for homogenous tuple span
@@ -520,7 +531,7 @@ imported fixed size arrays. This will ensure that we print out the imported
 tuples in homogenous form and will allow us to lift the 4096 element limit since
 we will no longer have type checker slow down issues.
 
-### Improve Scalability of Swift's Calling Convention Tuple ABI for Tuple with more than 6 elements
+### Improve Scalability of Swift's Calling Convention Tuple ABI for Tuple with 7 or more elements
 
 We propose that we change the Tuple ABI of Swift's calling convention for all
 new swift code where a Tuple has size > 6. This will fix scalability problems
@@ -548,7 +559,7 @@ stabilized library authors to incrementally update their libraries to use the
 new tuple ABI when they are able to guarantee that down stream clients will not
 break.
 
-### Why break ABI when a tuple has N == 7 elements vs some other N
+### Why break ABI when a tuple has N >= 7 elements vs some other N
 
 The author's came up with the number 7 by applying a modified version of
 [swift-ast-script](https://github.com/gottesmm/swift/tree/ast-script-for-tuples)
