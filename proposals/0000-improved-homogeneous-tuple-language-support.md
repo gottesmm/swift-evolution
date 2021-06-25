@@ -72,7 +72,7 @@ tuple elements increase, using homogenous tuples in this manner does not scale
 from a usability and compile time perspective. We explore these difficulties
 below:
 
-### Problem 1: Implementing Value and Collection operations on large homogenous tuples require use of a source generator or unsafe code
+### Problem 1: Basic Value and Collection operations on large homogenous tuples require use of a source generator or unsafe code
 
 To explore the implications of the current homogenous tuple model, imagine that
 we are defining a System API that wants to maintain a cache of 128 pointers to
