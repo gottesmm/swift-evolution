@@ -173,7 +173,7 @@ able to guarantee certain performance constraints. This generally forces the
 programmer to look at the assembly to guarantee that the optimizer optimized the
 unsafe code as the programmer expected, an unfortunate outcome.
 
-### Problem 2: Imported C fixed size arrays do not compose well with other Swift language constructs
+### Problem 2: Fixed size C arrays imported as large Tuples do not compose well with other Swift language features
 
 The Clang Importer today imports C fixed size arrays into Swift as homogenous
 tuples. For instance, the following C:
@@ -194,74 +194,98 @@ struct MyData_t {
 void printFloatData(UnsafePointer<Float>);
 ```
 
-The lack of language support for tuples results in these imported arrays not
-being as easy to work with as they should be:
+Currently, common operations one performs on such a fixed size array can not be
+performed in idiomatic Swift without resorting to a code generator or unsafe
+code. Additionally, there are artificial limitations imposed by the Clang
+Importer on importable code. We go through each of the issues below:
 
-1. The ClangImporter due to the bad type checker performance of large homogenous
-   tuples will not import a fixed size array if the array would be imported as a
-   tuple with more than 4096 elements (see
-   [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
-   a high level, the type checker is running into the same problem of the
-   programmer: we have made the problem more difficult than it need to be by
-   forcing the expression of redundant information in the language.
+#### Problem 2a: Imported Fixed size C arrays can not be iterated over due to missing Collection conformance
 
-2. Imported fixed size arrays can not be concisely iterated over due to
-   homogenous tuples lacking a Collection conformance. This makes an operation
-   that is easy to write in C much harder to perform in Swift since one must
-   define a nominal type wrapper and use one of the techniques above from our
-   PointerCache example. As a quick reminder using our imported `MyData_t`, this
-   is how we could use unsafe code to write our print method:
+A common task when working with fixed size arrays in C is to iterate over the
+contents of a fixed size array. When fixed size C arrays are imported into Swift
+as a homogeneous tuple, one can not idiomatically iterate over the C array's
+homogeneous tuple representation since homogeneous tuples do not have a
+Collection conformance. Instead, one must use unsafe code by defining a nominal
+type wrapper and use one of the techniques above from our `PointerCache`
+example. As a quick reminder using our imported `MyData_t`, this is how we could
+use unsafe code to write our print method:
 
-   ```swift
+```swift
+extension MyData_t {
+  func print() {
+    withUnsafeBytes(of: dataBuffer) { (buffer: UnsafeRawBufferPointer) -> PointerType? in
+      for i in 0..<1024 {
+         let f = buffer.load(fromByteOffset: i*MemoryLayout<Float>.stride, as: Float)
+         print(f)
+      }
+    }
+  }
+}
+```
+
+#### Problem 2b: C APIs that assume Array To Pointer Decay can not be used without unsafe code
+
+In C, we would be able to write the following code to pass our data buffer into
+`printFloatData` due to fixed size arrays decaying to pointers:
+
+```c
+void MyData_printFloatData(MyData_t *data) {
+    // printFloatData expects a 'float *', but data->dataBuffer is of type
+    // 'float [1024]'. This is valid C b/c 'float [1024]' decays to 'float *'
+    // implicitly.
+    printFloatData(data->dataBuffer);
+}
+```
+
+Once we import `MyData_t` into Swift though, `data.dataBuffer` has type `(Float,
+..., Float)` meaning that if we call `printFloatData` idiomatically by using the
+`&` operator, the types no longer line up since `&dataBuffer` is an unsafe
+pointer to a single tuple of N-`Float` instead of an unsafe pointer to a piece
+of memory containing `N` float contiguously:
+
+```swift
    extension MyData_t {
-     func print() {
-       withUnsafeBytes(of: dataBuffer) { (buffer: UnsafeRawBufferPointer) -> PointerType? in
-         for i in 0..<1024 {
-            let f = buffer.load(fromByteOffset: i*MemoryLayout<Float>.stride, as: Float)
-            print(f)
-         }
-       }
+     mutating func cPrint1() {
+       // We get a type error here since printFloatData accepts an
+       // UnsafePointer<Float> as its first argument and
+       // '&dataBuffer' is an UnsafePointer<(Float, ..., Float)>.
+       printFloatData(&dataBuffer) // Error! Types don't line up!
      }
    }
-   ```
-
-3. Imported fixed size arrays from C no longer compose with associated C apis
-   when working with C code in Swift. As an example, if we wanted to use the
-   imported C API `printFloatData` with our C imported type, we would be unable
-   to write the natural code due to the types not lining up:
-   ```swift
-      extension MyData_t {
-        mutating func cPrint1() {
-          // We get a type error here since printFloatData accepts an
-          // UnsafePointer<Float> as its first argument and
-          // '&dataBuffer' is an UnsafePointer<(Float, ..., Float)>.
-          printFloatData(&dataBuffer) // Error! Types don't line up!
-        }
+```
+To make this example work, we must write instead the following verbose code to satisfy the type checker:
+```swift
+  extension MyData_t {
+    func cPrint() {
+      withUnsafeBytes(of: x?.dataBuffer) {
+        printFloatData($0.baseAddress!.assumingMemoryBound(to: Float.self))
       }
-   ```
-   but instead must write the following verbose code to satisfy the type checker:
-   ```swift
-     extension MyData_t {
-       func cPrint() {
-         withUnsafeBytes(of: x?.dataBuffer) {
-           printFloatData($0.baseAddress!.assumingMemoryBound(to: Float.self))
-         }
-       }
-     }
-   ```
+    }
+  }
+```
 
-### Problem 3: Large homogenous tuples result in linear type checking behavior
+#### Problem 2c: Scalability problems cause Clang Importer to not import arrays larger than 4096.
 
-[SE-0283](0283-tuples-are-equatable-comparable-hashable.md) while enabling
-tuples to become equatable, hashable and comparable also introduced new code
-paths that result in linear work by the type checker since the type checker
-needs to prove that each individual tuple element obeys that protocol. This is
-exascerbated by the length of homogenous tuples. Luckily, We can eliminate that
-issue for homogenous tuples by taking advantage of the extra semantic
-information we have from the syntax to just use the type of the first tuple
-element to perform the type checking.
+The ClangImporter due to limitations in the compiler around large homogenous
+tuples will not import a fixed size array if the array would be imported as a
+tuple with more than 4096 elements (see
+[ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
+a high level, the type checker is running into the same problem of the
+programmer: we have made the problem more difficult than it need to be by
+forcing the expression of redundant information in the language.
 
-### Problem 4: Swift's Tuple ABI does not scale well at compile
+### Problem 3: Large homogenous tuples exascerbate linear type checking behavior from [SE-0283](0283-tuples-are-equatable-comparable-hashable.md)
+
+[SE-0283](0283-tuples-are-equatable-comparable-hashable.md) changed tuples to
+conform to Equatable, Hashable, and Comparable if all of the elements of such a
+tuple also conform to those protocols. This increased language expressiveness at
+the expense of requiring the type checker to perform linear work for such pieces
+of code since the type checker must prove that all elements of the tuple
+individually possess such conformances. This linear work is ok for small tuples,
+but for large homogeneous tuples, the work becomes significantly more expensive
+if one compares, hashes, or equates homogeneous tuples in a large code base.
+
+### Problem 4: Swift's Tuple ABI does not scale well for large Tuples
 
 Today Swift's ABI possesses a rule that all tuples are eagerly destructured at
 all costs. This means that if one were to pass a 1024 element tuple as an
@@ -306,13 +330,9 @@ increase tuple argument size:
 + -Onone,-O total compilation wall time is quadratic [O(n^2)]
 + -Onone,-O type checker compilation wall time is quadratic [O(n^2)]
 + -Onone,-O code size is linear O(n).
-+ -Onone,-O compilation memory usage
-+ -Onone,-O runtime memory usage
-+ -Onone,-O runtime is ...
 
-### Problem 5: Swift's Calling Convention Tuple ABI does not scale well at runtime for large tuples
-
-This can be seen by looking at our previous scale test example.
+On the author's computer (2019 Macbook Pro), when N = 4096, a near trunk
+compiler takes ~30 seconds to compile a piece of code that should be instant.
 
 ## Proposed solution
 
@@ -331,7 +351,7 @@ tuple and thus will be minimally effected. We would restrict ones ability to
 only use homogenous tuple spans in tuples that are otherwise single element
 lists.
 
-### Standard Library/Runtime Improvements:
+### Standard Library Change: Add HomogeneousTuple protocol
 
 We propose the addition of a new protocol called `HomogeneousTuple` that all
 homogenous tuples implicitly conform to:
@@ -390,11 +410,16 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
 Importantly notice that we are defining the Subsequence associated type to be
 the default subsequence type (a slice on top of Self).
 
-### Clang Importer Changes:
+### Clang Importer Change: Import Fixed Size Arrays as Homogeneous Tuples
 
 We propose changing the Clang Importer so that it sets the homogenous bit on all
 fixed size arrays that it imports as homogenous tuples. This will allow for all
 of the benefits from the work above to apply to these types when used in Swift.
+
+### Language Change: Add Argument To Pointer Conversion to convert UnsafePointer<(N x Int)> to UnsafePointer<Int>
+
+We propose adding a new Argument to Pointer conversion to enable users who
+import fixed size arrays from C as homogeneous tuples to pass such tuples to C APIs that when imported expect the fixed size array to have gone through 
 
 ## Detailed design
 
