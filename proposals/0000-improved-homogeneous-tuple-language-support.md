@@ -295,17 +295,17 @@ base.
 
 ### Problem 4: Swift's Tuple ABI does not scale well at compile and runtime for large Tuples
 
-Today Swift's ABI possesses a rule that all tuples are eagerly destructured at
-all costs. This means that if one were to pass a 1024 element tuple as an
-argument, the resulting function would have 1024 arguments resulting in poor
-performance. This ABI is an artifact of Swift's early evolution where there was
-an attempt to enable tuples to be passed as a function argument list. In such a
-case, destructuring the tuple into arguments makes sense. Moving forward in
-time, that functionality was eliminated from the language so now we are just
-left with an ABI rule that is actively harmful to both compile time and runtime
-performance. The result of these issues together is that people generally do not
-use tuples beyond a certain size since such code does not scale well. As an
-example, consider the following "scale file test":
+Today Swift's ABI possesses a rule that all tuples used as arguments and results
+are eagerly destructured at all costs. This means that if one were to pass a
+1024 element tuple as an argument, the resulting function would have 1024
+arguments resulting in poor performance. This ABI is an artifact of Swift's
+early evolution where there was an attempt to enable tuples to be passed as a
+function argument list. In such a case, destructuring the tuple into arguments
+makes sense. Moving forward in time, that functionality was eliminated from the
+language so now we are just left with an ABI rule that is actively harmful to
+both compile time and runtime performance. The result of these issues together
+is that people generally do not use tuples beyond a certain size since such code
+does not scale well. As an example, consider the following "scale file test":
 
 ```swift
 struct Foo {
