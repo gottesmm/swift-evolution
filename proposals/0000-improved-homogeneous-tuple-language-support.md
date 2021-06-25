@@ -224,7 +224,7 @@ extension MyData_t {
 }
 ```
 
-#### Problem 2b: C APIs that assume Array To Pointer Decay can not be used without unsafe code
+#### Problem 2b: Imported C APIs that assume Array To Pointer Decay can not be used with corresponding Imported Type with Safe code
 
 In C, we would be able to write the following code to pass our data buffer into
 `printFloatData` due to fixed size arrays decaying to pointers:
@@ -420,10 +420,23 @@ We propose changing the Clang Importer so that it sets the homogenous bit on all
 fixed size arrays that it imports as homogenous tuples. This will allow for all
 of the benefits from the work above to apply to these types when used in Swift.
 
-### Language Change: Add Argument To Pointer Conversion to convert UnsafePointer<(N x T)> to UnsafePointer<T> if T is an imported C type being passed to an imported C api.
+### Language Change: Change `&` operator to convert `(N x T)` to `UnsafePointer<T>` instead of `UnsafePointer<(N x T)>' if `(N x T)` is an imported C type.
 
-We propose adding a new Argument to Pointer conversion to enable users who
-import fixed size arrays from C as homogeneous tuples to pass such tuples to C APIs that when imported expect the fixed size array to have gone through 
+We propose allowing for `&` to convert `(N x T)` to `UnsafePointer<T>` instead
+of `UnsafePointer<(N x T)>` if `(N x T)` was synthesize by the Clang
+Importer. This will ensure that we can easily pass imported fixed size arrays to
+corresponding imported C apis in nice idiomatic Swift:
+
+```swift
+   extension MyData_t {
+     mutating func cPrint1() {
+       // No type error here since '&dataBuffer' results in an
+       // UnsafePointer<Float> since 'dataBuffer' was synthesized by the
+       // ClangImporter and is being passed to a C function (printFloatData).
+       printFloatData(&dataBuffer)
+     }
+   }
+```
 
 ## Detailed design
 
