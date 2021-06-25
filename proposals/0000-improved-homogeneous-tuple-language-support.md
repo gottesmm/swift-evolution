@@ -10,8 +10,8 @@
 
 ## Introduction
 
-Swift programmers frequently encounter homogenous tuples (e.x.: `(T, T, ...,
-T)`) in contexts such as:
+Swift programmers frequently encounter homogenous tuples (`(T, T, ..., T)`) in
+contexts such as:
 
 1. Writing code that uses an imported C fixed size array in Swift.
 2. Defining a Swift nominal type that uses a homogenous tuples to represent a
@@ -34,11 +34,11 @@ rest of the language. The specific list of proposed changes are:
   elements) that an imported fixed size array can have now that type checking
   homogenous tuples is fast.
 + Eliminating the need to use unsafe type pointer punning to pass imported C
-  fixed size arrays to related imported C APIs.
-+ Changing the Swift calling convention ABI to no longer eagerly destructure
-  tuples with 7 or more elements as aggregates instead of eagerly destructuring
-  the tuples into individual elements. The calling convention ABI for tuples
-  with less than 7 elements will not be modified.
+  fixed size arrays to imported C APIs using the `&` operator.
++ Changing the Swift calling convention ABI to pass tuples with 7 or more
+  elements as aggregates instead of destructuring the tuple into separate
+  arguments and return values. The calling convention ABI for tuples with less
+  than 7 elements will not be modified.
 
 NOTE: This proposal is specifically not attempting to implement a fixed size
 "Swifty" array for all Swift programmers. Instead, we are attempting to extend
@@ -49,9 +49,9 @@ Swift-evolution thread: **Still a Pitch**.
 
 ## Motivation
 
-Today in Swift, system programmers use homogenous tuples when working with
-imported fixed size C-arrays and when defining a fixed buffer of bytes of a
-certain type. As a quick example, consider the following C struct,
+Today in Swift, system programmers interact with homogenous tuples when working
+with imported fixed size C-arrays and when defining a fixed buffer of a specific
+type. As a quick example, consider the following C struct,
 
 ```c
 typedef struct {
@@ -72,7 +72,7 @@ tuple elements increase, using homogenous tuples in this manner does not scale
 from a usability and compile time perspective. We explore these difficulties
 below:
 
-### Problem 1: Basic operations on large homogenous tuples require use of a source generator or unsafe code
+### Problem 1: Implementing Value and Collection operations on large homogenous tuples require use of a source generator or unsafe code
 
 To explore the implications of the current homogenous tuple model, imagine that
 we are defining a System API that wants to maintain a cache of 128 pointers to
