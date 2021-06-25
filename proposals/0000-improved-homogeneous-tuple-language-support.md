@@ -420,7 +420,7 @@ We propose changing the Clang Importer so that it sets the homogenous bit on all
 fixed size arrays that it imports as homogenous tuples. This will allow for all
 of the benefits from the work above to apply to these types when used in Swift.
 
-### Language Change: Change `&` operator to convert `(N x T)` to `UnsafePointer<T>` instead of `UnsafePointer<(N x T)>' if `(N x T)` is an imported C type.
+### Language Change: Change `&` operator to convert `(N x T)` to `UnsafePointer<T>` instead of `UnsafePointer<(N x T)>` if `(N x T)` is an imported C type.
 
 We propose allowing for `&` to convert `(N x T)` to `UnsafePointer<T>` instead
 of `UnsafePointer<(N x T)>` if `(N x T)` was synthesize by the Clang
