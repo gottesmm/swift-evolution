@@ -1,38 +1,38 @@
 # Improved Language Support for Homogeneous Tuples
 
-* Proposal: [SE-NNNN](NNNN-improved-homogenous-tuple-language-support.md)
+* Proposal: [SE-NNNN](NNNN-improved-homogeneous-tuple-language-support.md)
 * Author: [Michael Gottesman](https://github.com/gottesmm)
 * Review Manager: TBD
 * Status: **Awaiting implementation**
 
 * Reference: [SE-0283](0283-tuples-are-equatable-comparable-hashable.md)
-* Pitch Thread 1: [https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogenous-tuples/49023)
+* Pitch Thread 1: [https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogeneous-tuples/49023](https://forums.swift.org/t/pitch-improved-compiler-support-for-large-homogeneous-tuples/49023)
 
 ## Introduction
 
-Swift programmers frequently encounter homogenous tuples (`(T, T, ..., T)`) in
+Swift programmers frequently encounter homogeneous tuples (`(T, T, ..., T)`) in
 contexts such as:
 
 1. Writing code that uses an imported C fixed size array in Swift.
-2. Defining a Swift nominal type that uses a homogenous tuples to represent a
+2. Defining a Swift nominal type that uses a homogeneous tuples to represent a
    field with a fixed layout of bytes (e.x.: `SmallString`)
 
 In this proposal, we attempt to improve language support for such tuples in a
-manner that makes homogenous tuples easier to write and compose better with the
+manner that makes homogeneous tuples easier to write and compose better with the
 rest of the language. The specific list of proposed changes are:
 
-+ The addition of syntactic sugar for declaring large homogenous tuples.
++ The addition of syntactic sugar for declaring large homogeneous tuples.
 + Introducing a new `HomogeneousTuple` protocol. This protocol will
   extend `RandomAccessCollection` and `MutableCollection` allowing for
-  homogenous tuples to be used as collections and access contiguous storage. It
+  homogeneous tuples to be used as collections and access contiguous storage. It
   will also provide a place for us to declare new helper init methods for
-  initializing homogenous tuple memory, allow us to expose the count of a tuple
+  initializing homogeneous tuple memory, allow us to expose the count of a tuple
   type, and also allow us to implement using default protocol implementations.
-  We will only allow for homogenous tuples to conform to this, not user types.
-+ Changing the Clang Importer to import fixed size arrays as sugared homogenous
+  We will only allow for homogeneous tuples to conform to this, not user types.
++ Changing the Clang Importer to import fixed size arrays as sugared homogeneous
   tuples and remove the arbitrary limitation on the number of elements (4096
   elements) that an imported fixed size array can have now that type checking
-  homogenous tuples is fast.
+  homogeneous tuples is fast.
 + Eliminating the need to use unsafe type pointer punning to pass imported C
   fixed size arrays to imported C APIs using the `&` operator.
 + Changing the Swift calling convention ABI to pass tuples with 7 or more
@@ -49,7 +49,7 @@ Swift-evolution thread: **Still a Pitch**.
 
 ## Motivation
 
-Today in Swift, system programmers interact with homogenous tuples when working
+Today in Swift, system programmers interact with homogeneous tuples when working
 with imported fixed size C-arrays and when defining a fixed buffer of a specific
 type. As a quick example, consider the following C struct,
 
@@ -68,16 +68,16 @@ struct MyVersionInfo_t {
 ```
 
 This works in the small for such small fixed size arrays but as the number of
-tuple elements increase, using homogenous tuples in this manner does not scale
+tuple elements increase, using homogeneous tuples in this manner does not scale
 from a usability and compile time perspective. We explore these difficulties
 below:
 
-### Problem 1: Basic Value and Collection operations on large homogenous tuples require use of a source generator or unsafe code
+### Problem 1: Basic Value and Collection operations on large homogeneous tuples require use of a source generator or unsafe code
 
-To explore the implications of the current homogenous tuple model, imagine that
+To explore the implications of the current homogeneous tuple model, imagine that
 we are defining a System API that wants to maintain a cache of 128 pointers to
 improve performance. Since we need to have enough storage for 128 pointers, we
-use a homogenous tuple of `UnsafeMutablePointer` that point at objects of type
+use a homogeneous tuple of `UnsafeMutablePointer` that point at objects of type
 `T`:
 
 ```swift
@@ -175,7 +175,7 @@ unsafe code as the programmer expected, an unfortunate outcome.
 
 ### Problem 2: Fixed size C array types imported as Homogeneous Tuples do not compose with idiomatic Swift or imported C functions that take fixed size arrays
 
-The Clang Importer today imports C fixed size arrays into Swift as homogenous
+The Clang Importer today imports C fixed size arrays into Swift as homogeneous
 tuples. For instance, the following C:
 
 ```c
@@ -269,7 +269,7 @@ To make this example work, we must write instead the following verbose code to s
 
 #### Problem 2c: Scalability problems cause Clang Importer to not import arrays larger than 4096.
 
-The ClangImporter due to limitations in the compiler around large homogenous
+The ClangImporter due to limitations in the compiler around large homogeneous
 tuples will not import a fixed size array if the array would be imported as a
 tuple with more than 4096 elements (see
 [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
@@ -277,7 +277,7 @@ a high level, the compiler seems to be running into the same problem of the
 programmer: we have made the problem more difficult than it need to be by
 forcing the expression of redundant information in the language.
 
-### Problem 3: Large homogenous tuples exascerbate linear type checking behavior from [SE-0283](0283-tuples-are-equatable-comparable-hashable.md)
+### Problem 3: Large homogeneous tuples exascerbate linear type checking behavior from [SE-0283](0283-tuples-are-equatable-comparable-hashable.md)
 
 [SE-0283](0283-tuples-are-equatable-comparable-hashable.md) changed tuples to
 conform to Equatable, Hashable, and Comparable if all of the elements of such a
@@ -342,23 +342,23 @@ compiler takes ~25 seconds to compile a piece of code that should be instant.
 
 ### Syntax Change: Homogeneous Tuple Type Sugar
 
-We propose a new sugar syntax for a "homogenous tuple span" element. The
+We propose a new sugar syntax for a "homogeneous tuple span" element. The
 grammar of tuple elements in Swift would be extended as follows:
 
 ```swift
 (5 * Int) -> (Int, Int, Int, Int, Int)
 ```
 
-This sugar is expanded before type checking, so beyond the homogenous bit that
+This sugar is expanded before type checking, so beyond the homogeneous bit that
 we set in the tuple type itself, the rest of the compiler just sees a normal
 tuple and thus will be minimally effected. We would restrict ones ability to
-only use homogenous tuple spans in tuples that are otherwise single element
+only use homogeneous tuple spans in tuples that are otherwise single element
 lists.
 
 ### Standard Library Change: Add HomogeneousTuple protocol
 
 We propose the addition of a new protocol called `HomogeneousTuple` that all
-homogenous tuples implicitly conform to:
+homogeneous tuples implicitly conform to:
 
 ```swift
 protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
@@ -416,8 +416,8 @@ the default subsequence type (a slice on top of Self).
 
 ### Clang Importer Change: Import Fixed Size Arrays as Sugared Homogeneous Tuples
 
-We propose changing the Clang Importer so that it sets the homogenous bit on all
-fixed size arrays that it imports as homogenous tuples. This will allow for all
+We propose changing the Clang Importer so that it sets the homogeneous bit on all
+fixed size arrays that it imports as homogeneous tuples. This will allow for all
 of the benefits from the work above to apply to these types when used in Swift.
 
 ### Language Change: Change `&` operator to convert `(N x T)` to `UnsafePointer<T>` instead of `UnsafePointer<(N x T)>` if `(N x T)` is an imported C type.
@@ -451,9 +451,9 @@ the relevant ABI stable library's author.
 
 ## Detailed design
 
-### Grammar Change: Add support for homogenous tuple span
+### Grammar Change: Add support for homogeneous tuple span
 
-In order to prase homogenous tuple spans, we modify the swift grammar as follows:
+In order to prase homogeneous tuple spans, we modify the swift grammar as follows:
 ```
   type-tuple:
     '(' type-tuple-body? ')'
@@ -462,20 +462,20 @@ In order to prase homogenous tuple spans, we modify the swift grammar as follows
   type-tuple-element:
     identifier? identifier ':' type
     type
-    type-homogenous-tuple-span
+    type-homogeneous-tuple-span
   integer_literal_gt_one:
     [2-9][0-9]*
-  type-homogenous-tuple-span:
+  type-homogeneous-tuple-span:
     integer_literal_gt_one '*' type
-  type-pure-homogenous-tuple:
-    '(' type-homogenous-tuple-span ')'
+  type-pure-homogeneous-tuple:
+    '(' type-homogeneous-tuple-span ')'
 ```
 
-When we parse a tuple that consists of a single homogenous tuple span element,
-we set in the tuple type a homogenous tuple bit using spare bits already
+When we parse a tuple that consists of a single homogeneous tuple span element,
+we set in the tuple type a homogeneous tuple bit using spare bits already
 available in the tuple type.
 
-NOTE: We specifically ban homogenous tuple spans that provide an integer literal
+NOTE: We specifically ban homogeneous tuple spans that provide an integer literal
 of 0 or 1. The reason for this is that given that Swift's generics do not
 support variadics or type level integers, having homogeneous tuples of size 0, 1
 are not useful. Instead we require our users to use an empty tuple or just an
@@ -486,7 +486,7 @@ element.
 The type checker today creates a type variable for all tuple elements when
 solving constraints since any element of the tuple could be different. But if
 the user provides us with the information ahead of time that they explicitly
-have a homogenous tuple, we can introduce a join constraint on all of the tuple
+have a homogeneous tuple, we can introduce a join constraint on all of the tuple
 elements allowing the constraint solver to be more efficient via the use of its
 merging heuristic:
 
@@ -495,40 +495,55 @@ merging heuristic:
 let x: (3 * Int) = (1, 2, 3)
 ```
 
-### Type Checker: Use homogenous tuple bit to decrease type checking when comparing, equating, and hashing homogenous tuples
+### Type Checker: Introduce homogeneous tuple bit and use it to eliminate linear type checking for comparing, equating, and hashing homogeneous tuples
 
 Today the type checker has to perform a linear amount of work when type checking
-homogenous tuples. This is exascerbated by the comparable/equatable/hashable
+homogeneous tuples. This is exascerbated by the comparable/equatable/hashable
 conformances added in
 [SE-0283](0283-tuples-are-equatable-comparable-hashable.md). We can eliminate
-this for large homogenous tuples since when we typecheck we will be able to
-infer that all elements of a tuple that has the homogenous tuple bit set is the
-same, allowing the type checker can just type check the first element of the
-tuple type and use only that for type checking purposes.
+this for large homogeneous tuples by using a spare bit in Tuple type to stash if
+the tuple was originally parsed or imported as a homogeneous tuple. Then when we
+typecheck a hash, comparable, or equality operation we will be able to infer
+that all elements of a tuple that has the homogeneous tuple bit set is the same,
+allowing the type checker can just check that the first element of the tuple
+type conform to the protocol, eliminating the linear work.
 
 ### HomogeneousTuple protocol
 
-This will be implemented following along the lines of the
-``ExpressibleBy*Literal`` protocols except that we will not allow for user
-defined types to conform to this protocol. The only conformances are for types
-with the homogenous tuple bit set preventing bad type checker performance. This
-will additionally let us implement the protocol's functionality by using a
-default implementation and using that default implementation for all
-tuples. This default implementation in practice will just be a trampoline into
-the c++ runtime. Since this is a protocol, we nautrally will allow for users to
-use the protocol as an extension and a generic requirement, e.x.:
+Our approach to implementing the HomogeneousTuple protocol is guided by the
+principles that:
+
++ The `HomogeneousTuple` protocol or any conformances to it should not be
+  implemented using assembly. Instead, we should declare it using an explicit
+  protocol in the standard library.
+
++ Homogeneous tuples should conform to the `HomogeneousTuple` protocol
+  implicitly and achieve their functionality via the usage of default protocol
+  conformances that have routines written in Swift or that trampoline into a C++
+  runtime routine.
+
+The reason why we believe this is a superior approach to using a hand assembled
+protocol and protocol conformances is that the implementation is more
+maintainable and platform independent. Also it becomes easy to declare and
+implement additional helper methods in the standard library itself without
+touching the runtime.
+
+As an example implementation consider the code on the following branch:
+
+NOTE: Since this is a protocol, we nautrally will allow for users to use the
+protocol to constraint extensions and as a generic requirement, e.x.:
 
 ```swift
-func myHomogenousTupleFunc<T : HomogeneousTuple>(...) { ... }
+func myHomogeneousTupleFunc<T : HomogeneousTuple>(...) { ... }
 
-extension X where Y : HomogenousTuple { ... }
+extension X where Y : HomogeneousTuple { ... }
 ```
 
 ### Clang Importer Changes
 
-The Clang Importer will be modified so that we set the homogenous tuple bit on
+The Clang Importer will be modified so that we set the homogeneous tuple bit on
 imported fixed size arrays. This will ensure that we print out the imported
-tuples in homogenous form and will allow us to lift the 4096 element limit since
+tuples in homogeneous form and will allow us to lift the 4096 element limit since
 we will no longer have type checker slow down issues.
 
 ### Improve Scalability of Swift's Calling Convention Tuple ABI for Tuple with 7 or more elements
@@ -670,7 +685,7 @@ problems:
    the optimizer.
 
 3. Any code written assuming that the ClangImporter imports fixed size arrays as
-   homogenous tuples will either need to be modified (a source compatibility
+   homogeneous tuples will either need to be modified (a source compatibility
    break) or we will have to ensure that where-ever one could use one of those
    tuples we can pass a NewFixedSizeArray. In practice this means adding a new
    implicit conversion and adding support in the type checker for accessing
@@ -712,7 +727,7 @@ By the rules of C, we would have that `MyPair` has a size of `24` since
 to need a whole additional byte to satisfy the alignment. In contrast in Swift,
 `MyPair` will have a size of `10` and a stride of `16`.
 
-Now lets take a look at how this plays with homogenous tuples stored in structs:
+Now lets take a look at how this plays with homogeneous tuples stored in structs:
 
 ```swift
 struct MyHomogeneousTuplePair {
