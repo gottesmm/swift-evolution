@@ -273,9 +273,9 @@ To make this example work, we must write instead the following verbose code to s
 
 #### Problem 2c: Scalability problems cause Clang Importer to not import arrays larger than 4096.
 
-The ClangImporter due to limitations in the compiler around large homogeneous
-tuples will not import a fixed size array if the array would be imported as a
-tuple with more than 4096 elements (see
+Due to compile time limitations in the compiler, the ClangImporter due to
+limitations will not import a fixed size array if the array would be imported as
+a tuple with more than 4096 elements (see
 [ImportType.cpp](https://github.com/apple/swift/blob/e91b305b940362238c0b63b27fd3cccdbecadbaa/lib/ClangImporter/ImportType.cpp#L571)). At
 a high level, the compiler seems to be running into the same problem of the
 programmer: we have made the problem more difficult than it need to be by
