@@ -419,7 +419,10 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
 ```
 
 Importantly notice that we are defining the Subsequence associated type to be
-the default subsequence type (a slice on top of Self).
+the default subsequence type (a slice on top of Self). As mentioned in the
+introduction, we are going to declare the protocol as a normal protocol in the
+standard library allowing for the standard library to add additional helper
+methods here and implement them using default protocol extensions.
 
 ### Clang Importer Change: Import Fixed Size Arrays as Sugared Homogeneous Tuples
 
