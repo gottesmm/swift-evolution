@@ -379,7 +379,7 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
   ///
   /// Example:
   ///
-  /// let * = (128 * Int)(repeating: 0)
+  /// let x = (128 * Int)(repeating: 0)
   /// let y = (128 * UnsafePointer<MyDataType>)(repeating: sentinelValue)
   init(repeating repeatedValue: Element)
 
@@ -392,11 +392,11 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
   /// Example:
   ///
   /// // Fill tuple with integral data.
-  /// let * = (1024 * Int) { (index: Index) -> Int in
+  /// let x = (1024 * Int) { (index: Index) -> Int in
   ///   return index
   /// }
   /// // Or more succintly:
-  /// let * = (1024 * Int) { $0 }
+  /// let x = (1024 * Int) { $0 }
   init(initializingWith initializer: (Index) throws -> Element) rethrows
 
   /// Initialize all elements of a tuple with pre-known values, placing the
@@ -409,7 +409,7 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
   /// Example:
   ///
   ///   // Fill tuple with integral data.
-  ///   let * = (1024 * Int) { (buffer: UnsafeMutableBufferPointer<Int>, initializedCount: inout Int) in
+  ///   let x = (1024 * Int) { (buffer: UnsafeMutableBufferPointer<Int>, initializedCount: inout Int) in
   ///     for i in 0..<1000 { x[i] = i }
   ///     initializedCount = 1000
   ///   }
