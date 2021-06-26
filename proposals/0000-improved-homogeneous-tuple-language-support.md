@@ -414,7 +414,7 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
   ///     initializedCount = 1000
   ///   }
   ///   precondition(x[1001] == 0, "Zero init!") // For arguments sake
-  init(unsafeUninitializedCapacity: Int, initializingWith initializer: (inout UnsafeMutableBufferPointer<Element>, inout Int) throws -> Void) rethrows
+  init(initializingWith initializer: (inout UnsafeMutableBufferPointer<Element>, inout Int) throws -> Void) rethrows
 }
 ```
 
