@@ -298,14 +298,15 @@ base.
 Today Swift's ABI possesses a rule that all tuples used as arguments and results
 are eagerly destructured at all costs. This means that if one were to pass a
 1024 element tuple as an argument, the resulting function would have 1024
-arguments resulting in poor performance. This ABI is an artifact of Swift's
-early evolution where there was an attempt to enable tuples to be passed as a
-function argument list. In such a case, destructuring the tuple into arguments
-makes sense. Moving forward in time, that functionality was eliminated from the
-language so now we are just left with an ABI rule that is actively harmful to
-both compile time and runtime performance. The result of these issues together
-is that people generally do not use tuples beyond a certain size since such code
-does not scale well. As an example, consider the following "scale file test":
+arguments resulting in poor compile and runtime performance. This ABI is an
+artifact of Swift's early evolution where there was an attempt to enable tuples
+to be passed as a function argument list. In such a case, destructuring the
+tuple into arguments makes sense. Moving forward in time, that functionality was
+eliminated from the language so now we are just left with an ABI rule that is
+actively harmful to both compile time and runtime performance. The result of
+these issues together is that people generally do not use tuples beyond a
+certain size since such code does not scale well. As an example, consider the
+following "scale file test":
 
 ```swift
 struct Foo {
@@ -337,7 +338,9 @@ increase tuple argument size:
 
 + -Onone,-O total compilation wall time is quadratic [O(n^2)]
 + -Onone,-O type checker compilation wall time is quadratic [O(n^2)]
-+ -Onone,-O code size is linear O(n).
++ -Onone,-O code size is linear O(n). This code-size increase is most likely due
+  to the need of the compiler to marshall data when calling/returning such
+  tuples.
 
 On the author's computer (2019 Macbook Pro), when N = 4096, a near trunk
 compiler takes ~25 seconds to compile a piece of code that should be instant.
@@ -499,6 +502,9 @@ merging heuristic:
 let x: (3 * Int) = (1, 2, 3)
 ```
 
+This is just additional goodness that we can take advantage of to improve the
+QoI of the compiler.
+
 ### Type Checker: Introduce homogeneous tuple bit and use it to eliminate linear type checking for comparing, equating, and hashing homogeneous tuples
 
 Today the type checker has to perform a linear amount of work when type checking
@@ -534,9 +540,11 @@ principles that:
   minimal set of leaf functionality in the runtime by trampolining from the
   default implementation to a runtime c++ implementation using unsafe
   code. IRGen should only generate the necessary type metadata to ensure that
-  the relevant builtin Conformance only defines type metadata required to
-  conform to `MutableCollection` and `RangeReplaceableCollection` and otherwise
-  delegate to the stdlib's default protocol conformance implementation.
+  the relevant builtin Conformance defines the type metadata required to conform
+  to `MutableCollection` and `RangeReplaceableCollection` (example: defining the
+  Element associated type) and otherwise delegate to the stdlib's default
+  protocol conformance implementation. This is safe since we know that all T
+  that conform to `HomogeneousTuple` are guaranteed to be a homogeneous tuple.
 
 The reason why we believe this is a superior approach is that the implementation
 is more maintainable and platform independent. Also it becomes easy to declare
