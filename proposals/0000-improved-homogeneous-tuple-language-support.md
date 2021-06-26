@@ -381,7 +381,7 @@ protocol HomogeneousTuple : RandomAccessCollection, MutableCollection
   ///
   /// let * = (128 * Int)(repeating: 0)
   /// let y = (128 * UnsafePointer<MyDataType>)(repeating: sentinelValue)
-  init(repeating: repeatedValue: Element)
+  init(repeating repeatedValue: Element)
 
   /// Initialize all elements of a tuple using a callback that maps an index to
   /// the value the index must take.
