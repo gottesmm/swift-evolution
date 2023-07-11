@@ -10,8 +10,8 @@
 
 Currently noncopyable fields of Noncopyable types are currently not allowed at
 all under SE-390. This reduces expressivity around destructuring noncopyable
-values. We would like to loosen the language rules here to allow for this
-increase in expressivity.
+values including self in mutating functions. We would like to loosen the language rules here
+to allow for this increase in expressivity.
 
 ## Motivation
 
