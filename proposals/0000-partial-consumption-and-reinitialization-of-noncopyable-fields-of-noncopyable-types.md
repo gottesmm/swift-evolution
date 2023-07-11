@@ -10,8 +10,8 @@
 
 Currently noncopyable fields of Noncopyable types are currently not allowed at
 all under SE-390. This reduces expressivity around destructuring noncopyable
-values including self in mutating functions. We would like to loosen the language rules here
-to allow for this increase in expressivity.
+values including self in mutating functions. We would like to loosen the
+language rules here to allow for this increase in expressivity.
 
 ## Motivation
 
@@ -60,9 +60,8 @@ fields of self later in the function.
 
 ## Proposed solution
 
-Given this reduction in expressivity it is
-natural to ask... can we improve this situation by allowing for partial
-consumption of self:
+Given this reduction in expressivity it is natural to ask... can we improve this
+situation by allowing for partial consumption of self:
 
 ```swift
 extension S {
@@ -88,9 +87,8 @@ We consider below a few different axes in the design space:
 1. On types with deinits
 2. When Library Evolution is enabled
 3. When Library Evolution is disabled
-
-In either case, whether or not we should allow for partial consumption only
-in methods.
+4. In either case, whether or not we should allow for partial consumption only
+   in methods.
 
 ### Partial Consumption on types with Deinits
 
@@ -230,6 +228,7 @@ the partially consumed noncopyable type, we would get an error. So even if a
 user of a type made such a mistake, it would never actually result in a valid
 program. So we would be giving up expressivity without any real gain.
 
+<!--
 ## Source compatibility
 
 Describe the impact of this proposal on source compatibility.  As a
@@ -392,3 +391,4 @@ why the new idea is better.
 ## Acknowledgments
 
 Thanks to Kavon, JoeG, and many others.
+-->
