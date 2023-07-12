@@ -90,13 +90,59 @@ written.
 
 ## Detailed design
 
-We consider below a few different axes in the design space:
+The main semantic change to the language is that the consumption and
+reinitialization rules of noncopyable types become "field sensitive". This means
+that instead of only allowing for a type to be consumed entirely or
+reinitialized entirely, the language allows for this to be done on a field by
+field basis. Example:
 
-1. On types with deinits
-2. When Library Evolution is enabled
-3. When Library Evolution is disabled
-4. In either case, whether or not we should allow for partial consumption only
-   in methods.
+```swift
+struct E1 : ~Copyable {}
+struct E2 : ~Copyable {}
+struct S : ~Copyable {
+    var e1 = E1()
+    var e2 = E2()
+}
+
+var x = S()
+let _ = x.e1
+useE2(e2) // This is ok!
+```
+
+Bindings that are of a type with a trivial deinits like `x` above, can be
+deconstructed and its remaining fields will be cleaned up at the end of `x`'s
+maximized lifetime scope, e.x.:
+
+```swift
+var x = S()
+if boolTest {
+    let _ = x.e1 // x.e1 is consumed here.
+    doSomething()
+    // x.e2 is destroyed here.
+} else {
+    doSomething()
+    // x is destroyed here.
+}
+```
+
+Values with trivial deinits can also be consumed and reinitialized in pieces
+with the reinitialized fields being destroyed at the end of the variable's
+maximized lifetime scope:
+
+```swift
+var x = S()
+let _ = consume x
+if boolTest {
+    x.e1 = E1()
+    doSomething()
+    // x.e1 is destroyed here. x.e2 is left uninitialized.
+} else {
+    doSomething()
+    // x is uninitialized so no destruction occurs.
+}
+```
+
+This also applies to 
 
 ### Partial Consumption on types with Deinits
 
@@ -123,6 +169,51 @@ implying that we never would call its own deinit implying that we must not allow
 it. Note that even though we do not allow this, we still allow for authors in
 consuming methods to use the discard operator to turn off the deinit of the
 value and then partially deconstruct the value.
+
+### Partial Consumption outside of Methods
+
+The final axis to consider is whether or not we should be even more restrictive
+and only allow for partial consumption of noncopyable types inside methods. The
+argument in favor of this approach is that the author of a type has the greatest
+understanding of the invariants of the type and the impact of a value being
+consumed and thus self being invalid. The argument against this is that the move
+checker will prevent any such misuses, e.x.: if one were to call any method on
+the partially consumed noncopyable type, we would get an error. So even if a
+user of a type made such a mistake, it would never actually result in a valid
+program. So we would be giving up expressivity without any real gain.
+
+## Source compatibility
+
+Describe the impact of this proposal on source compatibility.  As a
+general rule, all else being equal, Swift code that worked in previous
+releases of the tools should work in new releases.  That means both that
+it should continue to build and that it should continue to behave
+dynamically the same as it did before.  Changes that cannot satisfy
+this must be opt-in, generally by requiring a new language mode.
+
+This is not an absolute guarantee, and the Language Workgroup will
+consider intentional compatibility breaks if their negative impact
+can be shown to be small and the current behavior is causing
+substantial problems in practice.
+
+For proposals that affect parsing, consider whether existing valid
+code might parse differently under the proposal.  Does the proposal
+reserve new keywords that can no longer be used as identifiers?
+
+For proposals that affect type checking, consider whether existing valid
+code might type-check differently under the proposal.  Does it add new
+conversions that might make more overload candidates viable?  Does it
+change how names are looked up in existing code?  Does it make
+type-checking more expensive in ways that might run into implementation
+limits more often?
+
+For proposals that affect the standard library, consider the impact on
+existing clients.  If clients provide a similar API, will type-checking
+find the right one?  If the feature overloads an existing API, is it
+problematic that existing users of that API might start resolving to
+the new API?
+
+## ABI compatibility
 
 ### Partial Consumption when Library Evolution is enabled
 
@@ -224,93 +315,105 @@ compiled with/without library evolution enabled: in both language modes, public
 noncopyable types can only be partially consumed outside of their current module
 if they have @frozen attached.
 
-### Partial Consumption outside of Methods
+### Partial Consumption when Library Evolution is enabled
 
-The final axis to consider is whether or not we should be even more restrictive
-and only allow for partial consumption of noncopyable types inside methods. The
-argument in favor of this approach is that the author of a type has the greatest
-understanding of the invariants of the type and the impact of a value being
-consumed and thus self being invalid. The argument against this is that the move
-checker will prevent any such misuses, e.x.: if one were to call any method on
-the partially consumed noncopyable type, we would get an error. So even if a
-user of a type made such a mistake, it would never actually result in a valid
-program. So we would be giving up expressivity without any real gain.
+The clear invariant that partial consumption of noncopyable types relies upon is
+that all stored fields of the noncopyable type must be accessible in the module
+where the partial consumption occurs. Naturally this means that in library
+evolution our ability to partially consume types is significantly
+limited. Specifically:
 
-## Source compatibility
+Frozen types regardless of access control level can always be partially
+consumed. This includes even frozen types with private fields since even
+though the private field is not available to be used it is still exposed at
+the ABI level.
 
-Describe the impact of this proposal on source compatibility.  As a
-general rule, all else being equal, Swift code that worked in previous
-releases of the tools should work in new releases.  That means both that
-it should continue to build and that it should continue to behave
-dynamically the same as it did before.  Changes that cannot satisfy
-this must be opt-in, generally by requiring a new language mode.
+Public and usableFromInline types can never be partially consumed outside of
+the resilience domain where the type is defined. Since resilience domains are
+today limited to the current module, this means that one could not partially
+consume outside of the current module.
 
-This is not an absolute guarantee, and the Language Workgroup will
-consider intentional compatibility breaks if their negative impact
-can be shown to be small and the current behavior is causing
-substantial problems in practice.
+Internal types that are not usableFromInline, private, and fileprivate
+noncopyable types can always have their stored properties partially consumed.
 
-For proposals that affect parsing, consider whether existing valid
-code might parse differently under the proposal.  Does the proposal
-reserve new keywords that can no longer be used as identifiers?
+### Partial Consumption when Library Evolution is disabled
 
-For proposals that affect type checking, consider whether existing valid
-code might type-check differently under the proposal.  Does it add new
-conversions that might make more overload candidates viable?  Does it
-change how names are looked up in existing code?  Does it make
-type-checking more expensive in ways that might run into implementation
-limits more often?
+When we compile without library evolution, from an ABI perspective we have
+everything that we need to always partially consume even public types since when
+library evolution is disabled all types have a frozen ABI. But we have
+additional Source Compatibility constraints to consider: we have always allowed
+for authors to convert fields from being stored to computed and back. This
+creates source stability issues since:
 
-For proposals that affect the standard library, consider the impact on
-existing clients.  If clients provide a similar API, will type-checking
-find the right one?  If the feature overloads an existing API, is it
-problematic that existing users of that API might start resolving to
-the new API?
+When we convert a stored property to a computed property, we will be
+replacing a partial liveness use of just one of the value's stored fields to
+a use of the entire value since a computed property takes self as a fully
+live value. E.x.:
 
-## ABI compatibility
+```swift
+// Library
+public struct E : ~Copyable {}
+public struct S : ~Copyable {
+    var first: E
+    var second: E
+}
 
-Describe the impact on ABI compatibility.  As a general rule, the ABI
-of existing code must not change between tools releases or language
-modes.  This rule does not apply as often as source compatibility, but
-it is much stricter, and the Language Workgroup generally cannot allow
-exceptions.
+// Executable
+let _ = s.first // Invalidates s.first
+let _ = s.second // Invalidates s.second
 
-The ABI encompasses all aspects of how code is generated for the
-language, how that code interacts with other code that has been
-compiled separately, and how that code interacts with the Swift
-runtime library.  Most ABI changes center around interactions with
-specific declarations.  Proposals that do not affect how code is
-generated to interact with an external declaration usually do not
-have ABI impact.
+->
 
-For proposals that affect general code generation rules, consider
-the impact on code that's already been compiled.  Does the proposal
-affect declarations that haven't explicitly adopted it, and if so,
-does it change ABI details such as symbol names or conventions
-around their use?  Will existing code change its dynamic behavior
-when running against a new version of the language runtime or
-standard library?  Conversely, will code compiled in the new way
-continue to run on old versions of the language runtime or standard
-library?
+// Library
+struct S : ~Copyable {
+    var first: E
+    var second: E { E() }
+}
 
-For proposals that affect the standard library, consider the impact
-on any existing declarations.  As above, does the proposal change symbol
-names, conventions, or dynamic behavior?  Will newly-compiled code work
-on old library versions, and will new library versions work with
-previously-compiled code?
+// Executable
+let _ = s.first // Invalidates s.first.
+let _ = s.second // Uses all of s when calling the getter s.second. Use after free!
+```
 
-This section will often end up very short.  A proposal that just
-adds a new standard library feature, for example, will usually
-say either "This proposal is purely an extension of the ABI of the
-standard library and does not change any existing features" or
-"This proposal is purely an extension of the standard library which
-can be implemented without any ABI support" (whichever applies).
-Nonetheless, it is important to demonstrate that you've considered
-the ABI implications.
+When we convert a computed property to a stored property, we introduce a new
+partial invalidation potentially causing later code to stop compiling. E.x.:
 
-If the design of the feature was significantly constrained by
-the need to maintain ABI compatibility, this section is a reasonable
-place to discuss that.
+```swift
+// Library
+struct E : ~Copyable {}
+struct S : ~Copyable {
+   var first: E { E () }
+   func doSomething() { }
+}
+
+// Executable
+let _ = s.first // We call the s.first the getter.
+s.doSomething() // Call s.doSomething()
+
+->
+
+// Library
+public struct S : ~Copyable {
+   var first: E
+   func doSomething() { }
+}
+
+// Executable
+let _ = s.first // Invalidate s.first
+s.doSomething() // Error! s is not completely initialized.
+```
+
+These source compatibility concerns imply that even in non-ABI stable libraries
+we do not want to allow for public noncopyable types to be partially consumed by
+default. This suggests that we may want to add the ability for a library author
+to explicitly notate such public types that they are giving up these source
+compatibility properties. A natural way to do this is to endow @frozen with
+this meaning when applied to public noncopyable types in libraries without
+library evolution enabled. As an additional benefit, by extending the meaning of
+frozen in this manner, we prevent an additional difference in between Swift when
+compiled with/without library evolution enabled: in both language modes, public
+noncopyable types can only be partially consumed outside of their current module
+if they have @frozen attached.
 
 ## Implications on adoption
 
