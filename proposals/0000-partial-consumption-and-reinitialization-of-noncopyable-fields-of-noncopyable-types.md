@@ -90,8 +90,8 @@ written.
 ## Detailed design
 
 The main semantic change to the language is that the consumption and
-reinitialization rules of noncopyable types become "field sensitive". This means
-that instead of only allowing for a type to be consumed or reinitialized
+reinitialization rules of noncopyable types will become "field sensitive". This
+means that instead of only allowing for a type to be consumed or reinitialized
 entirely, the language allows for this to be done on a field by field basis,
 e.x.:
 
@@ -161,86 +161,98 @@ extension StructWithTrivialDeinit : ~Copyable {
 
 ### NonCopyable Values with Non-Trivial Deinits and Discard
 
-We cannot just naively allow noncopyable values with a non-trivial deinit to be
-partially initialized for a few reasons:
+NonCopyable values with a non-trivial deinit can only be partially consumed or
+reinitialized if:
 
-1. Swift requires a value to be completely live at the point in which a deinit
-   is applied [(*)](#footnote-1). Thus if we were to allow for such values to be partially
-   initialized, we would necessarily have to disable the deinit and then cleanup
-   the initialized fields of the 
+1. The value is completely reinitialized before end of scope.
+2. The `discard` operator is explicitly used to disable the value's deinit.
 
-2. Deinits are used to clean up resources that are uniquely owned (consider a
-   file descriptor) and thus in such situations a key part of the API contract
-   that an author is providing to the user. If consuming 
-
-Just not running the deinit and destroying the value in parts would break a
-   key invariant that an author of an API is defining.
-
-In order to partially consume or reinitialize a value with a non-trivial deinit,
-we need to consider that in Swift a non-trivial deinit always requires the
-entire value to be live at the point at which the deinit runs. This is in
-contrast to languages like C where one 
-
-With that constraint in mind, we cannot naively just allow for partial
-consumption or reinitialization of a value since the deinit would not be legal
-to run:
+If one of the above conditions is not true, the compiler will emit an error
+telling the user that the value must be either discarded or fully reinitialized
+before the end of its lifetime, e.x.:
 
 ```swift
-struct StructWithDeinit : ~Copyable {
-    var e1 = E1()
-    var e2 = E2()
-
-    deinit { ... }
-}
+do {
+    var s = StructWithDeinit()
+    let _ = s.e1
+} // Error! s has a deinit and is not fully initialized at end of its lifetime.
 
 do {
     var s = StructWithDeinit()
     let _ = s.e1
-    // We 
+    s.e1 = E1() // Ok! We reinitialize e1 before the end of scope.
+}
+
+struct StructWithDeinit2 {
+    var e1 = E1()
+    var e2 = E2()
+
+    deinit { ... }
+
+    consuming func consumeValue() {
+        let _ = e1
+    } // Error! self has a deinit but is not fully initialized before end of lifetime
+
+    consuming func consumeValue2() {
+        let _ = e1
+        discard self // Ok! We discard self so the deinit will not run.
+    }
 }
 ```
 
-<a name="footnote-1">(*)</a>: This is contrast to languages like C where it is allowed to pass an
-uninitialized pointer to a function as long as one does not access any memory
-through the pointer.
+The reason for these considerations is that:
 
-### Partial Consumption on types with Deinits
+1. Swift requires a value to be completely live at the point in which a deinit
+   is applied [(*)](#footnote-1). This implies if we were to allow for such
+   values to be partially initialized, we would necessarily have to destroy the
+   initialized fields of the type and not call the deinit.
 
-We ban partial consumption of noncopyable types with deinits since when a field
-is partially consumed, we are allowing for the type to be destroyed in
-parts. For example:
+2. Deinits are used to clean up resources that are uniquely owned (consider a
+   file descriptor) and thus in such situations a key part of the API contract
+   that an author is providing to the user. If an assignment operation is all
+   that was required to turn off such a deinit, it would create an easy way to
+   break a type's API contract in a manner that would be difficult to audit or
+   to track down in a large project.
+
+Another common pattern we expect users to want to be able to implement is to be
+able to return a struct's internal state via a mutating function without
+triggering the deinit. An example of such a case would be a FileDescriptor where
+one wishes to return the internal file descriptor state and reinitialize the
+FileDescriptor struct with a new default initialization. One cannot implement
+such a thing using a mutating method without an additional artificial consuming
+function since SE-390 restricts discard to consuming functions:
 
 ```swift
-struct E : ~Copyable
-struct S : ~Copyable {
-   var first: E
-   var second: E
-   deinit {}
-}
+struct FileDescriptors : ~Copyable {
+    var fd1: Int
+    var fd2: Int
 
-var s = S()
-let _ = s.first // s.first is destroyed here
-doSomething()
-// s.second is destroyed here
+    deinit {}
+
+    private consuming func getFD1() -> Int {
+        let result = fd1
+        discard self
+        return result
+    }
+}
 ```
 
-Since s here has been partially consumed, we never destroy it all together
-implying that we never would call its own deinit implying that we must not allow
-it. Note that even though we do not allow this, we still allow for authors in
-consuming methods to use the discard operator to turn off the deinit of the
-value and then partially deconstruct the value.
+Since we are relying upon `discard` as one of our ways to allow for partial
+consumption, we also loosen the requirements around discard by allowing for
+`discard` to be applied to self in mutating methods. Since a mutating method
+involves self being passed inout naturally we also allow for `discard`ed
+variables in these contexts to be reinitialized after being discarded.
 
-### Partial Consumption outside of Methods
-
-The final axis to consider is whether or not we should be even more restrictive
-and only allow for partial consumption of noncopyable types inside methods. The
-argument in favor of this approach is that the author of a type has the greatest
-understanding of the invariants of the type and the impact of a value being
-consumed and thus self being invalid. The argument against this is that the move
-checker will prevent any such misuses, e.x.: if one were to call any method on
-the partially consumed noncopyable type, we would get an error. So even if a
-user of a type made such a mistake, it would never actually result in a valid
-program. So we would be giving up expressivity without any real gain.
+```swift
+extension StructWithDeinit2 {
+    mutating func test() -> E1 {
+        let result = e1
+        discard self
+        self = StructWithDeinit2() // No Deinit Runs
+        return result
+    }
+}
+```
 
 ## Source compatibility
 
@@ -533,6 +545,47 @@ addition to the proposal which avoided creating a serious usability
 problem for many adopters of `@inlinable`.
 
 ## Alternatives considered
+
+The reason why we take this approach is that:
+
+Rather than introduce such an issue to the language, we instead use the discard 
+Luckily for us, we have a solution to this problem: the discard operator! The
+discard operator provides a manner for us to turn off the deinit of a type in a
+way that is explicit and gives appropriate emphasis to the reader of the code
+that the deinit is being disabled and a key type contract is being broken.
+
+Thus we 
+
+```swift
+struct StructWithDeinit : ~Copyable {
+    var e1 = E1()
+    var e2 = E2()
+
+    deinit { ... }
+}
+
+do {
+    var s = StructWithDeinit()
+    let _ = s.e1
+    // We 
+}
+```
+
+<a name="footnote-1">(*)</a>: This is contrast to languages like C where it is
+safe to pass an uninitialized pointer to a function as long as one does not
+access any memory through the pointer.
+
+### Partial Consumption outside of Methods
+
+The final axis to consider is whether or not we should be even more restrictive
+and only allow for partial consumption of noncopyable types inside methods. The
+argument in favor of this approach is that the author of a type has the greatest
+understanding of the invariants of the type and the impact of a value being
+consumed and thus self being invalid. The argument against this is that the move
+checker will prevent any such misuses, e.x.: if one were to call any method on
+the partially consumed noncopyable type, we would get an error. So even if a
+user of a type made such a mistake, it would never actually result in a valid
+program. So we would be giving up expressivity without any real gain.
 
 Describe alternative approaches to addressing the same problem.
 This is an important part of most proposal documents.  Reviewers
