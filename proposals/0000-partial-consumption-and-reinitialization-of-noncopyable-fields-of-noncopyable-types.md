@@ -8,15 +8,17 @@
 
 ## Introduction
 
-Currently noncopyable fields of Noncopyable types are currently not allowed at
-all under SE-390. This reduces expressivity around destructuring noncopyable
-values including self in mutating functions. We would like to loosen the
-language rules here to allow for this increase in expressivity.
+In SE-390, all noncopyable types are defined as being either [fully initialized or fully destroyed outside of initializers](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md#finer-grained-destructuring-in-consuming-methods-and-deinit).
+This reduces language expressivity by preventing a field of a noncopyable
+binding from being consumed without fully consuming the entire binding. This is
+especially noticable in the case of self in mutating methods. We would like to
+loosen the language rules to allow for partial consumpition and initialization
+in these cases.
 
 ## Motivation
 
 Currently given a var like construct (e.x.: var, inout), Swift does not allow
-for a stored field of the type to be partially consumed:
+for a stored field of the type to be partially consumed or initialized:
 
 ```swift
 struct E : ~Copyable {}
@@ -30,7 +32,7 @@ var s = S()
 let _ = s.e // Error! Cannot partially consume s
 ```
 
-Since this applies to inouts, this also applies to stored fields of self in
+Since these rules apply to inouts, this also applies to stored fields of self in
 mutating methods. E.x.:
 
 ```swift
@@ -48,7 +50,6 @@ out by using the consume operator:
 extension S {
     mutating func doSomething() {
         let _ = (consume self).e
-
         self = S()
     }
 }
@@ -56,12 +57,22 @@ extension S {
 
 while this works, it is a significiant reduction in expressivity since one has
 to consume /all/ of self causing one to be unable to access the rest of the
-fields of self later in the function. 
+fields of self later in the function. E.x.:
+
+```swift
+extension S {
+    mutating func doSomething() {
+        let _ = (consume self).e
+        print(k) // Error! self already consumed!
+        self = S()
+    }
+}
+```
 
 ## Proposed solution
 
 Given this reduction in expressivity it is natural to ask... can we improve this
-situation by allowing for partial consumption of self:
+situation by allowing for self to be partially initialized:
 
 ```swift
 extension S {
@@ -74,11 +85,8 @@ extension S {
 }
 ```
 
-We can do this and in fact, the Swift compiler already has support for this,
-albeit turned off! The reason that it is turned off is that we realized that
-there is design space here that we wanted to explore and that when the
-noncopyable proposal went through evolution we labeled partial consumption
-explicitly as an extension of the proposal. 
+We propose relaxing these restrictions to allow for code like the above to be
+written.
 
 ## Detailed design
 
@@ -228,7 +236,6 @@ the partially consumed noncopyable type, we would get an error. So even if a
 user of a type made such a mistake, it would never actually result in a valid
 program. So we would be giving up expressivity without any real gain.
 
-<!--
 ## Source compatibility
 
 Describe the impact of this proposal on source compatibility.  As a
@@ -391,4 +398,4 @@ why the new idea is better.
 ## Acknowledgments
 
 Thanks to Kavon, JoeG, and many others.
--->
+
