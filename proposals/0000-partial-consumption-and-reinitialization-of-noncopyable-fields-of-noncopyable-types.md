@@ -94,7 +94,7 @@ The main semantic change to the language is that the consumption and
 reinitialization rules of noncopyable types become "field sensitive". This means
 that instead of only allowing for a type to be consumed entirely or
 reinitialized entirely, the language allows for this to be done on a field by
-field basis. Example:
+field basis, e.x.:
 
 ```swift
 struct E1 : ~Copyable {}
