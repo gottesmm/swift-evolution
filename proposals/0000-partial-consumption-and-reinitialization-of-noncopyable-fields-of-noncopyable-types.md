@@ -11,9 +11,9 @@
 SE-390 defines all noncopyable types as being either [fully initialized or fully destroyed outside of initializers](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md#finer-grained-destructuring-in-consuming-methods-and-deinit).
 This reduces language expressivity by preventing a field of a noncopyable
 binding from being consumed without fully consuming the entire binding. A
-particularly annoying case where this restriction is noticable is self in
+particularly annoying case where this restriction is noticeable is self in
 mutating methods. We would like to loosen the language rules to allow for
-partial consumpition and initialization in these cases.
+partial consumption and initialization in these cases.
 
 ## Motivation
 
@@ -54,7 +54,7 @@ extension S {
 }
 ```
 
-This work but exhibits a significiant reduction in expressivity since one has to
+This work but exhibits a significant reduction in expressivity since one has to
 consume /all/ of self causing one to be unable to access the rest of the fields
 of self later in the function. E.x.:
 
@@ -89,7 +89,7 @@ written.
 
 ## Detailed design
 
-Swift's consumption and reinitialization rules for noncopyable types will be
+Swift's consumption and re-initialization rules for noncopyable types will be
 changed to be "field sensitive". This means that instead of only allowing for a
 type to be consumed or reinitialized entirely, the language allows for this to
 be done on a field by field basis, e.x.:
