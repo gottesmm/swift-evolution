@@ -165,7 +165,7 @@ We cannot just naively allow noncopyable values with a non-trivial deinit to be
 partially initialized for a few reasons:
 
 1. Swift requires a value to be completely live at the point in which a deinit
-   is applied [^1]. Thus if we were to allow for such values to be partially
+   is applied [(*)](#footnote-1). Thus if we were to allow for such values to be partially
    initialized, we would necessarily have to disable the deinit and then cleanup
    the initialized fields of the 
 
@@ -200,7 +200,7 @@ do {
 }
 ```
 
-[^1] This is contrast to languages like C where it is allowed to pass an
+<a name="footnote-1">(*)</a>: This is contrast to languages like C where it is allowed to pass an
 uninitialized pointer to a function as long as one does not access any memory
 through the pointer.
 
