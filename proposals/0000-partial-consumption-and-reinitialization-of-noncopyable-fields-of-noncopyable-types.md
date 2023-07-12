@@ -202,9 +202,9 @@ struct StructWithDeinit2 {
 The reasons for this behavior is that:
 
 1. Swift requires a value to be completely live at the point in which a deinit
-   is applied [(*)](#footnote-1). This implies if we were to allow for such
-   values to be partially initialized, we would necessarily have to destroy the
-   initialized fields of the type and not call the deinit.
+   is applied. This implies if we were to allow for such values to be partially
+   initialized, we would necessarily have to destroy the initialized fields of
+   the type and not call the deinit.
 
 2. Deinits are used to clean up resources that are uniquely owned (consider a
    file descriptor) and thus in such situations a key part of the API contract
@@ -392,103 +392,52 @@ text like "This feature can be freely adopted and un-adopted in source
 code with no deployment constraints and without affecting source or ABI
 compatibility."
 
-## Future directions
-
-Describe any interesting proposals that could build on this proposal
-in the future.  This is especially important when these future
-directions inform the design of the proposal, for example by making
-sure an attribute encodes enough information to be used for other
-purposes.
-
-The rest of the proposal should generally not talk about future
-directions except by referring to this section.  It is important
-not to confuse reviewers about what is covered by this specific
-proposal.  If there's a larger vision that needs to be explained
-in order to understand this proposal, consider starting a discussion
-thread on the forums to capture your broader thoughts.
-
-Avoid making affirmative statements in this section, such as "we
-will" or even "we should".  Describe the proposals neutrally as
-possibilities to be considered in the future.
-
-Consider whether any of these future directions should really just
-be part of the current proposal.  It's important to make focused,
-self-contained proposals that can be incrementally implemented and
-reviewed, but it's also good when proposals feel "complete" rather
-than leaving significant gaps in their design.  For example, when
-[SE-0193](https://github.com/apple/swift-evolution/blob/main/proposals/0193-cross-module-inlining-and-specialization.md)
-introduced the `@inlinable` attribute, it also included the
-`@usableFromInline` attribute so that declarations used in inlinable
-functions didn't have to be `public`.  This was a relatively small
-addition to the proposal which avoided creating a serious usability
-problem for many adopters of `@inlinable`.
-
 ## Alternatives considered
 
-The reason why we take this approach is that:
+### Partial Liveness always disables Deinit
 
-Rather than introduce such an issue to the language, we instead use the discard 
-Luckily for us, we have a solution to this problem: the discard operator! The
-discard operator provides a manner for us to turn off the deinit of a type in a
-way that is explicit and gives appropriate emphasis to the reader of the code
-that the deinit is being disabled and a key type contract is being broken.
-
-Thus we 
-
-```swift
-struct StructWithDeinit : ~Copyable {
-    var e1 = E1()
-    var e2 = E2()
-
-    deinit { ... }
-}
-
-do {
-    var s = StructWithDeinit()
-    let _ = s.e1
-    // We 
-}
-```
-
-<a name="footnote-1">(*)</a>: This is contrast to languages like C where it is
-safe to pass an uninitialized pointer to a function as long as one does not
-access any memory through the pointer.
+We could make it so that any partial consumption or initialization would disable
+the deinit. This would work against Swift's goals of being a safe easy to use
+language since we would be introducing a very easy way to break a library
+invariant that would be hard to audit in comparison to deinit.
 
 ### Partial Consumption outside of Methods
 
-The final axis to consider is whether or not we should be even more restrictive
-and only allow for partial consumption of noncopyable types inside methods. The
-argument in favor of this approach is that the author of a type has the greatest
-understanding of the invariants of the type and the impact of a value being
-consumed and thus self being invalid. The argument against this is that the move
-checker will prevent any such misuses, e.x.: if one were to call any method on
-the partially consumed noncopyable type, we would get an error. So even if a
-user of a type made such a mistake, it would never actually result in a valid
-program. So we would be giving up expressivity without any real gain.
+We could be even more restrictive and only allow for partial consumption of
+noncopyable types inside methods. The argument in favor of this approach is that
+the author of a type has the greatest understanding of the invariants of the
+type and the impact of a value being consumed and thus self being invalid. The
+argument against this is that the move checker will prevent any such misuses,
+e.x.: if one were to call any method on the partially consumed noncopyable type,
+we would get an error. So even if a user of a type made such a mistake, it would
+never actually result in a valid program. So we would be giving up expressivity
+without any real gain.
 
-Describe alternative approaches to addressing the same problem.
-This is an important part of most proposal documents.  Reviewers
-are often familiar with other approaches prior to review and may
-have reasons to prefer them.  This section is your first opportunity
-to try to convince them that your approach is the right one, and
-even if you don't fully succeed, you can help set the terms of the
-conversation and make the review a much more productive exchange
-of ideas.
+### Forcing Full Initialization of Values after Partial Consumption
 
-You should be fair about other proposals, but you do not have to
-be neutral; after all, you are specifically proposing something
-else.  Describe any advantages these alternatives might have, but
-also be sure to explain the disadvantages that led you to prefer
-the approach in this proposal.
+We could force a binding to be completely initialized using an init after
+partial consumption:
 
-You should update this section during the pitch phase to discuss
-any particularly interesting alternatives raised by the community.
-You do not need to list every idea raised during the pitch, just
-the ones you think raise points that are worth discussing.  Of course,
-if you decide the alternative is more compelling than what's in
-the current proposal, you should change the main proposal; be sure
-to then discuss your previous proposal in this section and explain
-why the new idea is better.
+```swift
+var s = S()
+let _ = consume s
+s.e1 = E1() // Error! Can only reinitialize s by invoking s's initializer
+s = S() // Ok! We are reinitializing s with a value by calling its init
+```
+
+The reason why this was proposed was that often times an init creates specific
+invariants and expectations in the type. By allowing for a type to be partially
+reinitialized after full consumption, we could allow for those invariants to be
+broken. After some discussion it was realized that this is actually programmer
+error due to an encapsulation issue that would also occur given a copyable
+type. Consider a copyable type with an init that enforces invariants. If the
+copyable type exposes the fields that maintain that invariant to outside users,
+the copyable type's invariants could also be broken. If the user wants to
+maintain these invariants, it needs to hide the internal stored property and use
+a computed property to maintain these invariants. There was agreement that the
+init issue was not a real issue since if the author exposed a stored property to
+code outside the type, then it was actually the author's programming error since
+to maintain the invariant, they should not have exposed the stored field.
 
 ## Acknowledgments
 
