@@ -256,6 +256,10 @@ extension StructWithDeinit2 {
 
 ## Source compatibility
 
+This proposal will not have any source compatibility impacts on code that is
+already written. But it can have impacts on future code due to the way that it
+impacts the ability to 
+
 Describe the impact of this proposal on source compatibility.  As a
 general rule, all else being equal, Swift code that worked in previous
 releases of the tools should work in new releases.  That means both that
