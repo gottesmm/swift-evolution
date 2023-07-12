@@ -22,7 +22,6 @@ for a stored field of the type to be partially consumed or initialized:
 
 ```swift
 struct E : ~Copyable {}
-
 struct S : ~Copyable {
     var first: E
     var second: Klass
@@ -92,29 +91,35 @@ written.
 
 The main semantic change to the language is that the consumption and
 reinitialization rules of noncopyable types become "field sensitive". This means
-that instead of only allowing for a type to be consumed entirely or
-reinitialized entirely, the language allows for this to be done on a field by
-field basis, e.x.:
+that instead of only allowing for a type to be consumed or reinitialized
+entirely, the language allows for this to be done on a field by field basis,
+e.x.:
 
 ```swift
 struct E1 : ~Copyable {}
 struct E2 : ~Copyable {}
-struct S : ~Copyable {
+struct StructWithTrivialDeinit : ~Copyable {
     var e1 = E1()
     var e2 = E2()
 }
 
-var x = S()
+var x = StructWithTrivialDeinit()
 let _ = x.e1
 useE2(e2) // This is ok!
 ```
+
+There is different behavior depending on whether or a binding has a trivial
+deinit like `x` does or if it has a non-trivial deinit. We consider these cases
+separately.
+
+### NonCopyable Values with Trivial Deinits
 
 Bindings that are of a type with a trivial deinits like `x` above, can be
 deconstructed and its remaining fields will be cleaned up at the end of `x`'s
 maximized lifetime scope, e.x.:
 
 ```swift
-var x = S()
+var x = StructWithTrivialDeinit()
 if boolTest {
     let _ = x.e1 // x.e1 is consumed here.
     doSomething()
@@ -125,12 +130,12 @@ if boolTest {
 }
 ```
 
-Values with trivial deinits can also be consumed and reinitialized in pieces
-with the reinitialized fields being destroyed at the end of the variable's
+Such values can also be fully consumed and then reinitialized in pieces with
+only the reinitialized fields being destroyed at the end of the variable's
 maximized lifetime scope:
 
 ```swift
-var x = S()
+var x = StructWithTrivialDeinit()
 let _ = consume x
 if boolTest {
     x.e1 = E1()
@@ -142,7 +147,62 @@ if boolTest {
 }
 ```
 
-This also applies to 
+This also applies to inout parameters and self in mutating methods,
+
+```swift
+extension StructWithTrivialDeinit : ~Copyable {
+    mutating func doSomething() {
+        let _ = consume self // Both e1 and e2 are destroyed.
+        self.e1 = E1()
+        self = S() // We only destroy e1.
+    }
+}
+```
+
+### NonCopyable Values with Non-Trivial Deinits and Discard
+
+We cannot just naively allow noncopyable values with a non-trivial deinit to be
+partially initialized for a few reasons:
+
+1. Swift requires a value to be completely live at the point in which a deinit
+   is applied [^1]. Thus if we were to allow for such values to be partially
+   initialized, we would necessarily have to disable the deinit and then cleanup
+   the initialized fields of the 
+
+2. Deinits are used to clean up resources that are uniquely owned (consider a
+   file descriptor) and thus in such situations a key part of the API contract
+   that an author is providing to the user. If consuming 
+
+Just not running the deinit and destroying the value in parts would break a
+   key invariant that an author of an API is defining.
+
+In order to partially consume or reinitialize a value with a non-trivial deinit,
+we need to consider that in Swift a non-trivial deinit always requires the
+entire value to be live at the point at which the deinit runs. This is in
+contrast to languages like C where one 
+
+With that constraint in mind, we cannot naively just allow for partial
+consumption or reinitialization of a value since the deinit would not be legal
+to run:
+
+```swift
+struct StructWithDeinit : ~Copyable {
+    var e1 = E1()
+    var e2 = E2()
+
+    deinit { ... }
+}
+
+do {
+    var s = StructWithDeinit()
+    let _ = s.e1
+    // We 
+}
+```
+
+[^1] This is contrast to languages like C where it is allowed to pass an
+uninitialized pointer to a function as long as one does not access any memory
+through the pointer.
 
 ### Partial Consumption on types with Deinits
 
