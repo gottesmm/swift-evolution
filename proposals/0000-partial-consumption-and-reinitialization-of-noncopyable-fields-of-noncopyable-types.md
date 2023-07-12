@@ -343,7 +343,7 @@ will ensure that library authors have a mechanism to know that an API
 incompatibility has been introduced and a semver major version increment is
 necessary to inform downstream users of the library. This is already able to be
 done in Xcode and support will be added into the Swift package manager for
-maintaing API stability files.
+maintaining API stability json files.
 
 ## ABI compatibility
 
@@ -353,36 +353,17 @@ where the partial consumption occurs. Naturally this means that in library
 evolution our ability to partially consume types is significantly
 limited. Specifically:
 
-Frozen types regardless of access control level can always be partially
-consumed. This includes even frozen types with private fields since even
-though the private field is not available to be used it is still exposed at
-the ABI level.
+1. Frozen types regardless of access control level can always be partially
+consumed. This includes even frozen types with private fields since even though
+the private field is not available to be used it is still exposed at the ABI
+level.
 
-Public and usableFromInline types can never be partially consumed outside of
+2. Public and usableFromInline types can never be partially consumed outside of
 the resilience domain where the type is defined. Since resilience domains are
 today limited to the current module, this means that one could not partially
 consume outside of the current module.
 
-Internal types that are not usableFromInline, private, and fileprivate
-noncopyable types can always have their stored properties partially consumed.
-
-The clear invariant that partial consumption of noncopyable types relies upon is
-that all stored fields of the noncopyable type must be accessible in the module
-where the partial consumption occurs. Naturally this means that in library
-evolution our ability to partially consume types is significantly
-limited. Specifically:
-
-Frozen types regardless of access control level can always be partially
-consumed. This includes even frozen types with private fields since even
-though the private field is not available to be used it is still exposed at
-the ABI level.
-
-Public and usableFromInline types can never be partially consumed outside of
-the resilience domain where the type is defined. Since resilience domains are
-today limited to the current module, this means that one could not partially
-consume outside of the current module.
-
-Internal types that are not usableFromInline, private, and fileprivate
+3. Internal types that are not usableFromInline, private, and fileprivate
 noncopyable types can always have their stored properties partially consumed.
 
 ## Implications on adoption
