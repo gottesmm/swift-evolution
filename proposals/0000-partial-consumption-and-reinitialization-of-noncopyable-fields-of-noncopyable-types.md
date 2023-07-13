@@ -333,17 +333,22 @@ forced to explicitly opt public noncopyable types into being able to be
 partially initialized by external users of their library. We propose that we
 repurpose the attribute `@frozen` for this purpose in all compilation modes
 since `@frozen` already has these implications when library evolution is
-enabled.
+enabled (see ABI compatibility section below).
 
 In order to ensure that we are not introducing a new dialect into the language,
-we will change Swift's API checking capability to know that even when library
-evolution is disabled, a type marked with `@frozen` is not allowed to change its
-layout by reordering fields or inserting fields in between other fields. This
-will ensure that library authors have a mechanism to know that an API
-incompatibility has been introduced and a semver major version increment is
-necessary to inform downstream users of the library. This is already able to be
-done in Xcode and support will be added into the Swift package manager for
-maintaining API stability json files.
+we will define `@frozen` to have the same properties when library evolution is
+disabled that it has when library evolution is enabled except that such a change
+is only considered to be an API break and thus require a semantic versioning
+major version increment. These are specifically that:
+
+1. A type's fields cannot be re-ordered.
+2. A stored property cannot be converted to a computed property or vis-a-versa.
+3. One cannot insert a new stored property in between two stored properties.
+
+In order to enforce this, we will teach Swift's API checker to know that a
+public type marked with `@frozen` has these restrictions without a semver
+bump. This is already able to be done in Xcode and support will be added into
+the Swift package manager for maintaining API stability json files.
 
 ## ABI compatibility
 
@@ -368,29 +373,9 @@ noncopyable types can always have their stored properties partially consumed.
 
 ## Implications on adoption
 
-The compatibility sections above are focused on the direct impact
-of the proposal on existing code.  In this section, describe issues
-that intentional adopters of the proposal should be aware of.
-
-For proposals that add features to the language or standard library,
-consider whether the features require ABI support.  Will adopters need
-a new version of the library or language runtime?  Be conservative: if
-you're hoping to support back-deployment, but you can't guarantee it
-at the time of review, just say that the feature requires a new
-version.
-
-Consider also the impact on library adopters of those features.  Can
-adopting this feature in a library break source or ABI compatibility
-for users of the library?  If a library adopts the feature, can it
-be *un*-adopted later without breaking source or ABI compatibility?
-Will package authors be able to selectively adopt this feature depending
-on the tools version available, or will it require bumping the minimum
-tools version required by the package?
-
-If there are no concerns to raise in this section, leave it in with
-text like "This feature can be freely adopted and un-adopted in source
-code with no deployment constraints and without affecting source or ABI
-compatibility."
+A library adopter of these features needs to be aware that if one marks a public
+type as frozen, one now will have opted into a truly frozen type from a semantic
+versioning perspective as talked about in the section above.
 
 ## Alternatives considered
 
