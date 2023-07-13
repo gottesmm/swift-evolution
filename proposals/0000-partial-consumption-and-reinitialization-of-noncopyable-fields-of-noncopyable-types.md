@@ -17,7 +17,7 @@ partial consumption and initialization in these cases.
 
 ## Motivation
 
-Given a var like construct (e.x.: var, inout), Swift does not allow for a stored
+Given a var like construct (for example: var, inout), Swift does not allow for a stored
 field of the type to be partially consumed or initialized:
 
 ```swift
@@ -32,7 +32,7 @@ let _ = s.e // Error! Cannot partially consume s
 ```
 
 Since these rules apply to inouts, this also applies to stored fields of self in
-mutating methods. E.x.:
+mutating methods:
 
 ```swift
 extension S {
@@ -42,8 +42,8 @@ extension S {
 }
 ```
 
-One can still of course pass the field inout to take the field out by using the
-consume operator:
+One can still pass the field inout to take the field out by using the consume
+operator:
 
 ```swift
 extension S {
@@ -56,7 +56,7 @@ extension S {
 
 This work but exhibits a significant reduction in expressivity since one has to
 consume /all/ of self causing one to be unable to access the rest of the fields
-of self later in the function. E.x.:
+of self later in the function:
 
 ```swift
 extension S {
@@ -92,7 +92,7 @@ written.
 Swift's consumption and re-initialization rules for noncopyable types will be
 changed to be "field sensitive". This means that instead of only allowing for a
 type to be consumed or reinitialized entirely, the language allows for this to
-be done on a field by field basis, e.x.:
+be done on a field by field basis:
 
 ```swift
 struct E1 : ~Copyable {}
@@ -104,7 +104,7 @@ struct StructWithTrivialDeinit : ~Copyable {
 
 var x = StructWithTrivialDeinit()
 let _ = x.e1
-useE2(e2) // This is ok!
+useE2(x.e2) // This is ok!
 ```
 
 There is different behavior depending on whether or a binding has a trivial
@@ -115,7 +115,7 @@ separately.
 
 A binding with a trivial deinit like `x` above, can be deconstructed and its
 remaining fields will be cleaned up at the end of `x`'s maximized lifetime
-scope, e.x.:
+scope:
 
 ```swift
 var x = StructWithTrivialDeinit()
@@ -168,7 +168,7 @@ reinitialized if:
 
 If both of the above conditions are not true, the compiler will emit an error
 telling the user that the value must be either discarded or fully reinitialized
-before the end of its lifetime, e.x.:
+before the end of its lifetime:
 
 ```swift
 do {
@@ -273,7 +273,7 @@ stored property to a noncopyable computed property and vis-a-versa.
 When we convert a stored property to a computed property, we will be
 replacing a partial liveness use of just one of the value's stored fields to
 a use of the entire value since a computed property takes self as a fully
-live value. E.x.:
+live value:
 
 ```swift
 // Library
@@ -301,7 +301,7 @@ let _ = s.second // Uses all of s when calling the getter s.second. Use after fr
 ```
 
 When we convert a computed property to a stored property, we introduce a new
-partial invalidation potentially causing later code to stop compiling. E.x.:
+partial invalidation potentially causing later code to stop compiling:
 
 ```swift
 // Library
@@ -352,11 +352,10 @@ the Swift package manager for maintaining API stability json files.
 
 ## ABI compatibility
 
-The clear invariant that partial consumption of noncopyable types relies upon is
-that all stored fields of the noncopyable type must be accessible in the module
-where the partial consumption occurs. Naturally this means that in library
-evolution our ability to partially consume types is significantly
-limited. Specifically:
+The invariant that partial consumption of noncopyable types relies upon is that
+all stored fields of the noncopyable type must be accessible in the module where
+the partial consumption occurs. Naturally this means that in library evolution
+our ability to partially consume types is significantly limited. Specifically:
 
 1. Frozen types regardless of access control level can always be partially
 consumed. This includes even frozen types with private fields since even though
@@ -392,11 +391,11 @@ We could be even more restrictive and only allow for partial consumption of
 noncopyable types inside methods. The argument in favor of this approach is that
 the author of a type has the greatest understanding of the invariants of the
 type and the impact of a value being consumed and thus self being invalid. The
-argument against this is that the move checker will prevent any such misuses,
-e.x.: if one were to call any method on the partially consumed noncopyable type,
-we would get an error. So even if a user of a type made such a mistake, it would
-never actually result in a valid program. So we would be giving up expressivity
-without any real gain.
+argument against this is that the move checker will prevent any such
+misuses. For example if one were to call any method on the partially consumed
+noncopyable type, we would get an error. So even if a user of a type made such a
+mistake, it would never actually result in a valid program. So we would be
+giving up expressivity without any real gain.
 
 ### Forcing Full Initialization of Values after Partial Consumption
 
