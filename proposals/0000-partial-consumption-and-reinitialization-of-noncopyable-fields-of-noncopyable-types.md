@@ -90,9 +90,8 @@ written.
 ## Detailed design
 
 Swift's consumption and re-initialization rules for noncopyable types will be
-changed to be "field sensitive". This means that instead of only allowing for a
-type to be consumed or reinitialized entirely, the language allows for this to
-be done on a field by field basis:
+changed to be "field sensitive". This means that the language will now allow for
+a binding to be invalidated on a field by field basis:
 
 ```swift
 var x = S()
