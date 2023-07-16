@@ -23,12 +23,12 @@ field of the type to be partially consumed or initialized:
 ```swift
 struct E : ~Copyable {}
 struct S : ~Copyable {
-    var first: E
-    var second: Klass
+    var e1: E
+    var e2: E
 }
 
 var s = S()
-let _ = s.e // Error! Cannot partially consume s
+let _ = s.e1 // Error! Cannot partially consume s
 ```
 
 Since these rules apply to inouts, this also applies to stored fields of self in
@@ -37,7 +37,7 @@ mutating methods:
 ```swift
 extension S {
     mutating func doSomething() {
-        let _ = self.e // Error! Cannot partially consume self
+        let _ = self.e1 // Error! Cannot partially consume self
     }
 }
 ```
@@ -48,7 +48,7 @@ operator:
 ```swift
 extension S {
     mutating func doSomething() {
-        let _ = (consume self).e
+        let _ = (consume self).e1
         self = S()
     }
 }
@@ -61,7 +61,7 @@ of self later in the function:
 ```swift
 extension S {
     mutating func doSomething() {
-        let _ = (consume self).e
+        let _ = (consume self).e1
         print(k) // Error! self already consumed!
         self = S()
     }
@@ -76,10 +76,10 @@ situation by allowing for self to be partially initialized:
 ```swift
 extension S {
     mutating func doSomething() {
-        let _ = e
+        let _ = e1
         print(k) // I can still print k!
-        e = E() // Reinitialize e so self is fully initialized at end of
-                // doSomething()
+        e1 = E() // Reinitialize e so self is fully initialized at end of
+                 // doSomething()
     }
 }
 ```
@@ -95,30 +95,23 @@ type to be consumed or reinitialized entirely, the language allows for this to
 be done on a field by field basis:
 
 ```swift
-struct E1 : ~Copyable {}
-struct E2 : ~Copyable {}
-struct StructWithTrivialDeinit : ~Copyable {
-    var e1 = E1()
-    var e2 = E2()
-}
-
-var x = StructWithTrivialDeinit()
+var x = S()
 let _ = x.e1
 useE2(x.e2) // This is ok!
 ```
 
-There is different behavior depending on whether or a binding has a trivial
-deinit like `x` does or if it has a non-trivial deinit. We consider these cases
-separately.
+There is different behavior depending on whether or a binding does not have a
+deinit like `x : S` does or if it has a non-trivial deinit. We go through each
+below:
 
-### NonCopyable Values with Trivial Deinits
+### NonCopyable Values without Deinits
 
-A binding with a trivial deinit like `x` above, can be deconstructed and its
+A binding without a deinit like `x` above, can be deconstructed and its
 remaining fields will be cleaned up at the end of `x`'s maximized lifetime
 scope:
 
 ```swift
-var x = StructWithTrivialDeinit()
+var x = S()
 if boolTest {
     let _ = x.e1 // x.e1 is consumed here.
     doSomething()
@@ -134,7 +127,7 @@ only the reinitialized fields being destroyed at the end of the variable's
 maximized lifetime scope:
 
 ```swift
-var x = StructWithTrivialDeinit()
+var x = S()
 let _ = consume x
 if boolTest {
     x.e1 = E1()
@@ -149,7 +142,7 @@ if boolTest {
 This also applies to inout parameters and self in mutating methods,
 
 ```swift
-extension StructWithTrivialDeinit : ~Copyable {
+extension S : ~Copyable {
     mutating func doSomething() {
         let _ = consume self // Both e1 and e2 are destroyed.
         self.e1 = E1()
@@ -158,7 +151,7 @@ extension StructWithTrivialDeinit : ~Copyable {
 }
 ```
 
-### NonCopyable Values with Non-Trivial Deinits and Discard
+### NonCopyable Values with Deinits
 
 NonCopyable values with a non-trivial deinit can only be partially consumed or
 reinitialized if:
@@ -166,11 +159,19 @@ reinitialized if:
 1. The value is completely reinitialized before end of scope.
 2. The `discard` operator is explicitly used to disable the value's deinit.
 
-If both of the above conditions are not true, the compiler will emit an error
-telling the user that the value must be either discarded or fully reinitialized
-before the end of its lifetime:
+If there exists a path through the program where neither of the above conditions
+are true, the compiler will emit an error explaining to the the user that the
+value must be either discarded or fully reinitialized before the end of its
+lifetime:
 
 ```swift
+struct StructWithDeinit : ~Copyable {
+    var e1 = E()
+    var e2 = E()
+
+    deinit { ... }
+}
+
 do {
     var s = StructWithDeinit()
     let _ = s.e1
@@ -219,6 +220,138 @@ where deinits are being disabled), we create a programming model where the user
 can partially consume/reinit types with deinits in a safe manner with the
 compiler's guidance.
 
+### Source stability guarantees and `@frozen`
+
+For copyable types, Swift provides source stability guarantees that allow for a
+library author to convert a stored property on a public type to a computed
+property and vis-a-versa. This guarantee does not apply naturally to noncopyable
+types due to the above invalidation rules.
+
+When we convert a stored property to a computed property, we will be
+replacing a partial liveness use of just one of the value's stored fields to
+a use of the entire value since a computed property takes self as a fully
+live value:
+
+```swift
+// Library
+public struct E : ~Copyable {}
+public struct S : ~Copyable {
+    var first: E
+    var second: E
+}
+
+// Executable
+let _ = s.first // Invalidates s.first
+let _ = s.second // Invalidates s.second
+
+->
+
+// Library
+struct S : ~Copyable {
+    var first: E
+    var second: E { E() }
+}
+
+// Executable
+let _ = s.first // Invalidates s.first.
+let _ = s.second // Uses all of s when calling the getter s.second. Use after free!
+```
+
+In words, the conversion from the stored property to the computed property
+causes what was a partial use of `s.second` into a use of all of `s` causing a
+use after free violation.
+
+When we convert a computed property to a stored property, we introduce a new
+partial invalidation potentially causing later code to stop compiling:
+
+```swift
+// Library
+struct E : ~Copyable {}
+struct S : ~Copyable {
+   var first: E { E () }
+   func doSomething() { }
+}
+
+// Executable
+let _ = s.first // We call the s.first the getter.
+s.doSomething() // Call s.doSomething()
+
+->
+
+// Library
+public struct S : ~Copyable {
+   var first: E
+   func doSomething() { }
+}
+
+// Executable
+let _ = s.first // Invalidate s.first
+s.doSomething() // Error! s is not completely initialized.
+```
+
+In words, by converting the computed property `s.first`, we change a
+non-invalidating use of `s` to a use that invalidates `s.first` causing later
+uses that require `s` to be entirely alive to no longer be legal.
+
+Given these source compatibility issues, we require library authors in all
+compilation modes to explicitly opt public noncopyable types into partial
+initialization semantics by attaching the `@frozen` attribute to such types. By
+doing this, we are changing the current semantics of `@frozen` when library
+evolution is disabled from having no semantic meaning to instead restricting a
+type from being changed in the following manners without a major semver
+increment:
+
+1. A type's fields being re-ordered.
+2. A stored property being converted to a computed property or vis-a-versa.
+3. Inserting a new stored property in between two stored properties.
+
+By requiring the semver increment when a `@frozen` type is compiled in such a
+way, we signal to users of the library that API stability has been broken by the
+library.
+
+In order to enforce this when library evolution is disabled, we will teach
+Swift's API checker to know that when a public type marked with `@frozen` is
+changed in the above way, one must perform a semver major bump. This type of API
+checking is already supported in Xcode and also in the Swift package manager via
+the command `swift package diagnose-api-breaking-changes`.
+
+## Source compatibility
+
+This proposal will not have any source compatibility impacts on code that is
+already written. All noncopyable code written today do not allow for values to
+be partially live implying that we are strictly increasing the set of valid
+Swift programs. Due to the new semantics of `@frozen`, libraries written with
+library evolution disabled will not need to ensure that when they change
+`@frozen` types they bump their major semver number.
+
+## ABI compatibility
+
+The invariant that partial consumption of noncopyable types relies upon is that
+all stored fields of the noncopyable type must be accessible in the module where
+the partial consumption occurs. Naturally this means that in library evolution
+our ability to partially consume types is significantly limited. Specifically:
+
+1. `@frozen` types regardless of access control level can always be partially
+consumed. This includes even frozen types with private fields since even though
+the private field can not be used directly it is still exposed at the ABI level.
+
+2. `public` and `@usableFromInline` types can never be partially consumed
+outside of the resilience domain where the type is defined. Since resilience
+domains are today limited to the current module, this means that one could not
+partially consume outside of the current module.
+
+3. `internal` types that are not `@usableFromInline`, `private`, and
+`fileprivate` noncopyable types can always have their stored properties
+partially consumed.
+
+## Implications on adoption
+
+A library adopter of these features needs to be aware that if one marks a public
+type as frozen, one now will have opted into a truly frozen type from a semantic
+versioning perspective as talked about in the section above.
+
+## Future directions
+
 ### Discard in Mutating Methods
 
 Another common pattern we expect users to want to be able to implement is to be
@@ -261,121 +394,6 @@ extension StructWithDeinit2 {
 }
 ```
 
-## Source compatibility
-
-This proposal will not have any source compatibility impacts on code that is
-already written. All noncopyable code written today do not allow for values to
-be partially live implying that we are strictly increasing the set of valid
-Swift programs. That being said, this proposal does affect the ability for
-library maintainers to break source in the future when converting a noncopyable
-stored property to a noncopyable computed property and vis-a-versa.
-
-When we convert a stored property to a computed property, we will be
-replacing a partial liveness use of just one of the value's stored fields to
-a use of the entire value since a computed property takes self as a fully
-live value:
-
-```swift
-// Library
-public struct E : ~Copyable {}
-public struct S : ~Copyable {
-    var first: E
-    var second: E
-}
-
-// Executable
-let _ = s.first // Invalidates s.first
-let _ = s.second // Invalidates s.second
-
-->
-
-// Library
-struct S : ~Copyable {
-    var first: E
-    var second: E { E() }
-}
-
-// Executable
-let _ = s.first // Invalidates s.first.
-let _ = s.second // Uses all of s when calling the getter s.second. Use after free!
-```
-
-When we convert a computed property to a stored property, we introduce a new
-partial invalidation potentially causing later code to stop compiling:
-
-```swift
-// Library
-struct E : ~Copyable {}
-struct S : ~Copyable {
-   var first: E { E () }
-   func doSomething() { }
-}
-
-// Executable
-let _ = s.first // We call the s.first the getter.
-s.doSomething() // Call s.doSomething()
-
-->
-
-// Library
-public struct S : ~Copyable {
-   var first: E
-   func doSomething() { }
-}
-
-// Executable
-let _ = s.first // Invalidate s.first
-s.doSomething() // Error! s is not completely initialized.
-```
-
-These source compatibility concerns suggest that library authors should be
-forced to explicitly opt public noncopyable types into being able to be
-partially initialized by external users of their library. We propose that we
-repurpose the attribute `@frozen` for this purpose in all compilation modes
-since `@frozen` already has these implications when library evolution is
-enabled (see ABI compatibility section below).
-
-In order to ensure that we are not introducing a new dialect into the language,
-we will define `@frozen` to have the same properties when library evolution is
-disabled that it has when library evolution is enabled except that such a change
-is only considered to be an API break and thus require a semantic versioning
-major version increment. These are specifically that:
-
-1. A type's fields cannot be re-ordered.
-2. A stored property cannot be converted to a computed property or vis-a-versa.
-3. One cannot insert a new stored property in between two stored properties.
-
-In order to enforce this, we will teach Swift's API checker to know that a
-public type marked with `@frozen` has these restrictions without a semver
-bump. This is already able to be done in Xcode and support will be added into
-the Swift package manager for maintaining API stability json files.
-
-## ABI compatibility
-
-The invariant that partial consumption of noncopyable types relies upon is that
-all stored fields of the noncopyable type must be accessible in the module where
-the partial consumption occurs. Naturally this means that in library evolution
-our ability to partially consume types is significantly limited. Specifically:
-
-1. Frozen types regardless of access control level can always be partially
-consumed. This includes even frozen types with private fields since even though
-the private field is not available to be used it is still exposed at the ABI
-level.
-
-2. Public and usableFromInline types can never be partially consumed outside of
-the resilience domain where the type is defined. Since resilience domains are
-today limited to the current module, this means that one could not partially
-consume outside of the current module.
-
-3. Internal types that are not usableFromInline, private, and fileprivate
-noncopyable types can always have their stored properties partially consumed.
-
-## Implications on adoption
-
-A library adopter of these features needs to be aware that if one marks a public
-type as frozen, one now will have opted into a truly frozen type from a semantic
-versioning perspective as talked about in the section above.
-
 ## Alternatives considered
 
 ### Partial Liveness always disables Deinit
@@ -391,11 +409,11 @@ We could be even more restrictive and only allow for partial consumption of
 noncopyable types inside methods. The argument in favor of this approach is that
 the author of a type has the greatest understanding of the invariants of the
 type and the impact of a value being consumed and thus self being invalid. The
-argument against this is that the move checker will prevent any such
-misuses. For example if one were to call any method on the partially consumed
-noncopyable type, we would get an error. So even if a user of a type made such a
-mistake, it would never actually result in a valid program. So we would be
-giving up expressivity without any real gain.
+argument against this is that the compiler will prevent any such misuses via
+noncopyable diagnostics. For example if one were to call any method on the
+partially consumed noncopyable type, we would get an error. So even if a user of
+a type made such a mistake, it would never actually result in a valid
+program. So we would be giving up expressivity without any real gain.
 
 ### Forcing Full Initialization of Values after Partial Consumption
 
@@ -426,4 +444,3 @@ to maintain the invariant, they should not have exposed the stored field.
 ## Acknowledgments
 
 Thanks to Kavon, JoeG, and many others.
-
