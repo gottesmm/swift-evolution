@@ -18,7 +18,7 @@ partial consumption and initialization in these cases.
 ## Motivation
 
 Given a var like construct (for example: var, inout), Swift does not allow for a stored
-field of the type to be partially consumed or initialized:
+field of the binding to be partially consumed or initialized:
 
 ```swift
 struct E : ~Copyable {}
