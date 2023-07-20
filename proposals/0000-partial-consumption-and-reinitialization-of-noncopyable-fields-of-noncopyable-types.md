@@ -9,7 +9,7 @@
 ## Introduction
 
 SE-390 defines all noncopyable types as being either [fully initialized or fully destroyed outside of initializers](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md#finer-grained-destructuring-in-consuming-methods-and-deinit).
-This reduces language expressivity by preventing a field of a noncopyable
+This reduces language expressivity by preventing a noncopyable field of a noncopyable
 binding from being consumed without fully consuming the entire binding. A
 particularly annoying case where this restriction is noticeable is self in
 mutating methods. We would like to loosen the language rules to allow for
@@ -18,13 +18,15 @@ partial consumption and initialization in these cases.
 ## Motivation
 
 Given a var like construct (for example: var, inout), Swift does not allow for a stored
-field of the binding to be partially consumed or initialized:
+noncopyable field of the binding to be partially consumed or initialized:
 
 ```swift
 struct E : ~Copyable {}
+class Klass {}
 struct S : ~Copyable {
     var e1: E
     var e2: E
+    var k: Klass
 }
 
 var s = S()
@@ -91,7 +93,8 @@ written.
 
 Swift's consumption and re-initialization rules for noncopyable types will be
 changed to be "field sensitive". This means that the language will now allow for
-a binding to be invalidated on a field by field basis:
+a noncopyable binding to have its noncopyable fields be invalidated on a field
+by field basis:
 
 ```swift
 var x = S()
@@ -99,9 +102,22 @@ let _ = x.e1
 useE2(x.e2) // This is ok!
 ```
 
-There is different behavior depending on whether or a binding does not have a
-deinit like `x : S` does or if it has a non-trivial deinit. We go through each
-below:
+The specific behavior of these field sensitive invalidation rules vary depending
+on whether or not the type of the binding has a deinit. We go through each of
+the semantics in the next section below.
+
+For copyable fields, the current behavior of copying the underlying field
+without invalidation will remain the unchanged:
+
+```swift
+var x = S()
+let _ = x.k
+useK(x.k) // This is ok since we copied x.k above.
+```
+
+Given a copyable `borrowing` or `consuming` binding, since the underlying type
+is copyable, we know its fields must also be copyable implying that we will just
+copy them without invalidating any part of the underlying binding.
 
 ### NonCopyable Values without Deinits
 
@@ -152,16 +168,14 @@ extension S : ~Copyable {
 
 ### NonCopyable Values with Deinits
 
-NonCopyable values with a non-trivial deinit can only be partially consumed or
-reinitialized if:
+NonCopyable values with a deinit can only be partially consumed or reinitialized
+if:
 
 1. The value is completely reinitialized before end of scope.
 2. The `discard` operator is explicitly used to disable the value's deinit.
 
 If there exists a path through the program where neither of the above conditions
-are true, the compiler will emit an error explaining to the the user that the
-value must be either discarded or fully reinitialized before the end of its
-lifetime:
+are true, the compiler will emit an error:
 
 ```swift
 struct StructWithDeinit : ~Copyable {
@@ -203,15 +217,17 @@ The reasons for this behavior is that:
 
 1. Swift requires a value to be completely live at the point in which a deinit
    is applied. This implies if we were to allow for such values to be partially
-   initialized, we would necessarily have to destroy the initialized fields of
-   the type and not call the deinit.
+   initialized at the end of its lifetime, we could not call the deinit. This
+   would result in us being forced to clean up the partial apply in pieces since
+   that is the only thing that we /could/ do.
 
 2. Deinits are used to clean up resources that are uniquely owned (consider a
    file descriptor) and thus in such situations a key part of the API contract
-   that an author is providing to the user. If an assignment operation is all
-   that was required to turn off such a deinit, it would create an easy way to
-   break a type's API contract in a manner that would be difficult to audit or
-   to track down in a large project.
+   that an author is providing to the user. Requring only an assignment
+   operation to turn off such a deinit would result in code bases where such
+   type contracts are simple to break and hard to track down or audit if done in
+   error. In contrast, requiring an explicit discard along paths where such
+   behavior is desired provides an explicit opt in that avoids such pitfalls.
 
 By requiring the value to be completely initialized (allowing the deinit to be
 called) or requiring an explicit discard to be used (making it easy to tell
@@ -224,7 +240,7 @@ compiler's guidance.
 For copyable types, Swift provides source stability guarantees that allow for a
 library author to convert a stored property on a public type to a computed
 property and vis-a-versa. This guarantee does not apply naturally to noncopyable
-types due to the above invalidation rules.
+types. We go through each case below:
 
 When we convert a stored property to a computed property, we will be
 replacing a partial liveness use of just one of the value's stored fields to
@@ -304,15 +320,16 @@ increment:
 2. A stored property being converted to a computed property or vis-a-versa.
 3. Inserting a new stored property in between two stored properties.
 
-By requiring the semver increment when a `@frozen` type is compiled in such a
-way, we signal to users of the library that API stability has been broken by the
-library.
+These are the same semantic restrictions that a `@frozen` type has when library
+evolution is enabled except that we allow for them to be changed after a semver
+increment. By requiring the semver increment, we signal to users of the library
+that API stability has been broken by the library.
 
-In order to enforce this when library evolution is disabled, we will teach
-Swift's API checker to know that when a public type marked with `@frozen` is
-changed in the above way, one must perform a semver major bump. This type of API
-checking is already supported in Xcode and also in the Swift package manager via
-the command `swift package diagnose-api-breaking-changes`.
+In order to enforce this when library evolution is disabled, Swift's API checker
+will be taught that when a public type marked with `@frozen` is changed in the
+above way, one must perform a semver major bump. This type of API checking is
+already supported in Xcode and also in the Swift package manager via the command
+`swift package diagnose-api-breaking-changes`.
 
 ## Source compatibility
 
@@ -327,20 +344,21 @@ library evolution disabled will not need to ensure that when they change
 
 The invariant that partial consumption of noncopyable types relies upon is that
 all stored fields of the noncopyable type must be accessible in the module where
-the partial consumption occurs. Naturally this means that in library evolution
-our ability to partially consume types is significantly limited. Specifically:
+the partial consumption occurs. Naturally this means that when library evolution
+is enabled our ability to partially consume types is significantly
+limited. Specifically:
 
 1. `@frozen` types regardless of access control level can always be partially
-consumed. This includes even frozen types with private fields since even though
-the private field can not be used directly it is still exposed at the ABI level.
+consumed. This includes even frozen types with private fields since the field is
+exposed at the ABI level even if it cannot be used directly in source.
 
 2. `public` and `@usableFromInline` types can never be partially consumed
 outside of the resilience domain where the type is defined. Since resilience
 domains are today limited to the current module, this means that one could not
 partially consume outside of the current module.
 
-3. `internal` types that are not `@usableFromInline`, `private`, and
-`fileprivate` noncopyable types can always have their stored properties
+3. noncopyable types with access control that is `private`, `fileprivate`, or
+`internal` without `@usableFromInline` can always have their stored properties
 partially consumed.
 
 ## Implications on adoption
@@ -391,6 +409,34 @@ extension StructWithDeinit2 {
         return result
     }
 }
+```
+
+### Allow for Partial Invalidation of Fields using `consume`
+
+The `consume` operator currently is not allowed to be applied to fields of
+types regardless of copyability:
+
+```swift
+var x = CopyableType()
+let _ = consume x.k // Error! 'consume' can only be applied to a local binding ('let', 'var', or parameter)
+```
+
+We could loosen the restrictions on `consume` by applying the rules around
+partial consumption from this proposal. This would apply to noncopyable types
+with copyable fields preventing a copy of the copyable field:
+
+```swift
+var x = NonCopyableType()
+let _ = x.copyableField // copyableField is copied.
+let _ = consume x.copyableField // We invalidated copyableField
+```
+
+and would also apply to copyable fields of copyable types:
+
+```swift
+var x = CopyableTypeWithDeinit()
+let _ = consume x.copyableField // We invalidate copyableField
+// Need to reinitialize x.copyableField before we call the deinit at end of scope.
 ```
 
 ## Alternatives considered
