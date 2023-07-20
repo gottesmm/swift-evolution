@@ -370,6 +370,10 @@ partially consume outside of the current module.
 `internal` without `@usableFromInline` can always have their stored properties
 partially consumed.
 
+When library evolution is disabled, we do not have any additional ABI concerns
+since ABI stability is not guaranteed implying we can rely on library users
+recompiling their code when changes are made to the library.
+
 ## Implications on adoption
 
 A library adopter of these features needs to be aware that if one marks a public
