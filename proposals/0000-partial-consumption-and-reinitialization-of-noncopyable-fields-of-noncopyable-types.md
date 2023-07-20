@@ -115,9 +115,18 @@ let _ = x.k
 useK(x.k) // This is ok since we copied x.k above.
 ```
 
-Given a copyable `borrowing` or `consuming` binding, since the underlying type
-is copyable, we know its fields must also be copyable implying that we will just
-copy them without invalidating any part of the underlying binding.
+Given a copyable `borrowing` or`consuming` binding, since the underlying type is
+copyable, we know its fields must also be copyable implying that we will just
+copy them without invalidating any part of the underlying binding:
+
+```swift
+func f(_ x: borrowing CopyableType) {
+  let _ = x.copyableField // No invalidation. Copy copyableField
+}
+func g(_ x: consuming CopyableType) {
+  let _ = x.copyableField // No invalidation. Copy copyableField
+}
+```
 
 ### NonCopyable Values without Deinits
 
