@@ -33,8 +33,8 @@ var s = S()
 let _ = s.e1 // Error! Cannot partially consume s
 ```
 
-Since these rules apply to inouts, this also applies to stored fields of self in
-mutating methods:
+Since these rules apply to inout arguments, this also applies to stored fields
+of self in mutating methods:
 
 ```swift
 extension S {
@@ -44,14 +44,16 @@ extension S {
 }
 ```
 
-One can still pass the field inout to take the field out by using the consume
-operator:
+One can still take advantage of `self` being passed inout to take the field out
+by using the `consume` operator and reinitializing `self` before the end of the
+function:
 
 ```swift
 extension S {
-    mutating func doSomething() {
-        let _ = (consume self).e1
+    mutating func doSomething() -> E {
+        let result = (consume self).e1
         self = S()
+        return result
     }
 }
 ```
