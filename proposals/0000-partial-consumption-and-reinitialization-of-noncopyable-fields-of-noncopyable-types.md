@@ -8,7 +8,7 @@
 
 ## Introduction
 
-SE-390 defines all noncopyable types as being either [fully initialized or fully destroyed outside of initializers](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md#finer-grained-destructuring-in-consuming-methods-and-deinit).
+SE-390 defines all noncopyable types as being either [fully initialized or fully destroyed (outside of initializers)](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md#finer-grained-destructuring-in-consuming-methods-and-deinit).
 This reduces language expressivity by preventing a noncopyable field of a noncopyable
 binding from being consumed without fully consuming the entire binding. A
 particularly annoying case where this restriction is noticeable is self in
@@ -21,56 +21,81 @@ Given a var like construct (for example: var, inout), Swift does not allow for a
 noncopyable field of the binding to be partially consumed or initialized:
 
 ```swift
-struct E : ~Copyable {}
-class Klass {}
-struct S : ~Copyable {
-    var e1: E
-    var e2: E
-    var k: Klass
+struct Socket : ~Copyable {
+    // Initialize an unused socket.
+    init() { ... }
+    deinit() { ... }
+    mutating func read() -> UnsafeMutableRawBufferPointer { ... }
+    consuming func close() { ... }
+}
+class Model { ... }
+
+struct MicroServiceRequest : ~Copyable {
+    var readSocket: Socket
+    var writeSocket: Socket
+    var model: Model
 }
 
-var s = S()
-let _ = s.e1 // Error! Cannot partially consume s
+var request = MicroServiceRequest()
+let _ = s.readSocket // Error! Cannot partially consume s
 ```
 
 Since these rules apply to inout arguments, this also applies to stored fields
 of self in mutating methods:
 
 ```swift
-extension S {
-    mutating func doSomething() {
-        let _ = self.e1 // Error! Cannot partially consume self
+extension MicroServiceRequest {
+    /// Read the remaining data and close our read socket.
+    mutating func readRemainingData() -> UnsafeRawBufferPointer {
+        let data = self.readSocket.read()
+        self.readSocket.close() // Error! Cannot partially consume self!
+        return data
     }
 }
 ```
 
-One can still take advantage of `self` being passed inout to take the field out
-by using the `consume` operator and reinitializing `self` before the end of the
-function:
+One can still take advantage of `self` being passed inout to mutating methods to
+retrieve the field by using the `consume` operator and reinitializing `self`
+before the end of the function:
 
 ```swift
-extension S {
-    mutating func doSomething() -> E {
-        let result = (consume self).e1
-        self = S()
-        return result
+extension MicroServiceRequest {
+    /// Read the remaining data and close our read socket.
+    mutating func readRemainingData() -> UnsafeRawBufferPointer {
+        let data = self.readSocket.read()
+        (consume self).readSocket.close()
+        self = MicroServiceRequest()
+        return data
     }
 }
 ```
 
-This work but exhibits a significant reduction in expressivity since one has to
-consume /all/ of self causing one to be unable to access the rest of the fields
-of self later in the function:
+This successfully compiles without error, but in the process we also are forced
+to close the write socket since one has to consume /all/ of self to consume the
+read socket.
+
+Another approach would be to create a helper function that takes in the Socket
+inout, closes the socket, and reinitializes the memory with an empty Socket:
 
 ```swift
-extension S {
-    mutating func doSomething() {
-        let _ = (consume self).e1
-        print(k) // Error! self already consumed!
-        self = S()
+extension MicroServiceRequest {
+    private static func closeSocket(_ x: inout Socket) {
+      x.close()
+      x = Socket()
+    }
+
+    /// Read the remaining data and close our read socket.
+    mutating func readRemainingData() -> UnsafeRawBufferPointer {
+        let data = self.readSocket.read()
+        consumeSocket(&self.readSocket)
+        self = MicroServiceRequest()
+        return data
     }
 }
 ```
+
+this again works, but again shows reduced expressivity since we had to create a
+separate helper function just to close the socket.
 
 ## Proposed solution
 
@@ -78,12 +103,12 @@ Given this reduction in expressivity it is natural to ask... can we improve this
 situation by allowing for self to be partially initialized:
 
 ```swift
-extension S {
-    mutating func doSomething() {
-        let _ = e1
-        print(k) // I can still print k!
-        e1 = E() // Reinitialize e so self is fully initialized at end of
-                 // doSomething()
+extension MicroServiceRequest {
+    mutating func readRemainingData() -> UnsafeRawBufferPointer {
+        let data = self.readSocket.read()
+        self.readSocket.close()
+        self.readSocket = Socket()
+        return data
     }
 }
 ```
@@ -99,9 +124,9 @@ a noncopyable binding to have its noncopyable fields be invalidated on a field
 by field basis:
 
 ```swift
-var x = S()
-let _ = x.e1
-useE2(x.e2) // This is ok!
+var request: MicroServiceRequest
+let _ = request.readSocket
+writeToSocket(request.writeSocket) // This is ok!
 ```
 
 The specific behavior of these field sensitive invalidation rules vary depending
@@ -112,9 +137,9 @@ For copyable fields, the current behavior of copying the underlying field
 without invalidation will remain the unchanged:
 
 ```swift
-var x = S()
-let _ = x.k
-useK(x.k) // This is ok since we copied x.k above.
+var x = NonCopyableStructWithCopyableField()
+let _ = x.copyableField
+useK(x.copyableField) // This is ok since we copied x.copyableField above.
 ```
 
 Given a copyable `borrowing` or`consuming` binding, since the underlying type is
@@ -137,11 +162,15 @@ remaining fields will be cleaned up at the end of `x`'s maximized lifetime
 scope:
 
 ```swift
+struct S : ~Copyable {
+    var noncopyableField1: E
+    var noncopyableField2: E
+}
 var x = S()
 if boolTest {
-    let _ = x.e1 // x.e1 is consumed here.
+    let _ = x.noncopyableField1 // x.noncopyableField1 is consumed here.
     doSomething()
-    // x.e2 is destroyed here.
+    // x.noncopyableField2 is destroyed here.
 } else {
     doSomething()
     // x is destroyed here.
@@ -156,9 +185,9 @@ maximized lifetime scope:
 var x = S()
 let _ = consume x
 if boolTest {
-    x.e1 = E1()
+    x.noncopyableField1 = E()
     doSomething()
-    // x.e1 is destroyed here. x.e2 is left uninitialized.
+    // x.noncopyableField1 is destroyed here. x.noncopyableField2 is left uninitialized.
 } else {
     doSomething()
     // x is uninitialized so no destruction occurs.
@@ -170,9 +199,9 @@ This also applies to inout parameters and self in mutating methods,
 ```swift
 extension S : ~Copyable {
     mutating func doSomething() {
-        let _ = consume self // Both e1 and e2 are destroyed.
-        self.e1 = E1()
-        self = S() // We only destroy e1.
+        let _ = consume self // Both noncopyableField1 and noncopyableField2 are destroyed.
+        self.noncopyableField1 = E()
+        self = S() // We only destroy noncopyableField1.
     }
 }
 ```
@@ -190,35 +219,35 @@ are true, the compiler will emit an error:
 
 ```swift
 struct StructWithDeinit : ~Copyable {
-    var e1 = E()
-    var e2 = E()
+    var noncopyableField1 = E()
+    var noncopyableField2 = E()
 
     deinit { ... }
 }
 
 do {
     var s = StructWithDeinit()
-    let _ = s.e1
+    let _ = s.noncopyableField1
 } // Error! s has a deinit and is not fully initialized at end of its lifetime.
 
 do {
     var s = StructWithDeinit()
-    let _ = s.e1
-    s.e1 = E1() // Ok! We reinitialize e1 before the end of scope.
+    let _ = s.noncopyableField1
+    s.noncopyableField1 = E() // Ok! We reinitialize noncopyableField1 before the end of scope.
 }
 
 struct StructWithDeinit2 {
-    var e1 = E1()
-    var e2 = E2()
+    var noncopyableField1 = E()
+    var noncopyableField2 = E()
 
     deinit { ... }
 
     consuming func consumeValue() {
-        let _ = e1
+        let _ = noncopyableField1
     } // Error! self has a deinit but is not fully initialized before end of lifetime
 
     consuming func consumeValue2() {
-        let _ = e1
+        let _ = noncopyableField1
         discard self // Ok! We discard self so the deinit will not run.
     }
 }
@@ -417,8 +446,8 @@ variables in these contexts to be reinitialized after being discarded.
 
 ```swift
 extension StructWithDeinit2 {
-    mutating func test() -> E1 {
-        let result = e1
+    mutating func test() -> E {
+        let result = noncopyableField1
         discard self
         self = StructWithDeinit2() // No Deinit Runs
         return result
@@ -483,7 +512,7 @@ partial consumption:
 ```swift
 var s = S()
 let _ = consume s
-s.e1 = E1() // Error! Can only reinitialize s by invoking s's initializer
+s.noncopyableField1 = E() // Error! Can only reinitialize s by invoking s's initializer
 s = S() // Ok! We are reinitializing s with a value by calling its init
 ```
 
