@@ -377,8 +377,8 @@ This proposal will not have any source compatibility impacts on code that is
 already written. All noncopyable code written today do not allow for values to
 be partially live implying that we are strictly increasing the set of valid
 Swift programs. Due to the new semantics of `@frozen`, libraries written with
-library evolution disabled will not need to ensure that when they change
-`@frozen` types they bump their major semver number.
+library evolution disabled will need to ensure that when they change `@frozen`
+types they bump their major semver number.
 
 ## ABI compatibility
 
