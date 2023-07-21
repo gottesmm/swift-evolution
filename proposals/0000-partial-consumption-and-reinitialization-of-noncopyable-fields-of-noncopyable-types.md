@@ -258,8 +258,8 @@ The reasons for this behavior is that:
 1. Swift requires a value to be completely live at the point in which a deinit
    is applied. This implies if we were to allow for such values to be partially
    initialized at the end of its lifetime, we could not call the deinit. This
-   would result in us being forced to clean up the partial apply in pieces since
-   that is the only thing that we /could/ do.
+   would result in us being forced to clean up the partially initialized value
+   in pieces since that is the only thing that we /could/ do.
 
 2. Deinits are used to clean up resources that are uniquely owned (consider a
    file descriptor) and thus in such situations a key part of the API contract
