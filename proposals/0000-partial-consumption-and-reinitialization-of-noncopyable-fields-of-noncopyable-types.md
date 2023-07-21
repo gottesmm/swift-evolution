@@ -478,6 +478,7 @@ let _ = consume x.copyableField // We invalidated copyableField
 and would also apply to copyable fields of copyable types:
 
 ```swift
+NOTE TO SELF: Can we support classes here?
 var x = CopyableTypeWithDeinit()
 let _ = consume x.copyableField // We invalidate copyableField
 // Need to reinitialize x.copyableField before we call the deinit at end of scope.
@@ -493,7 +494,15 @@ language since we would be introducing a very easy way to break a library
 invariant that would be hard to audit in comparison to deinit:
 
 ```swift
-ADD EXAMPLE HERE
+struct S : ~Copyable {
+    var noncopyableField: E
+    deinit {
+        logError()
+    }
+}
+
+let x = S()
+let _ = x.e // Deinit is not run anymore and we do not log our error.
 ```
 
 ### Partial Consumption outside of Methods
