@@ -17,7 +17,7 @@ partial consumption and initialization in these cases.
 
 ## Motivation
 
-Given a var like construct (for example: var, inout), Swift does not allow for a stored
+Given a mutable binding (for example: var, inout), Swift does not allow for a stored
 noncopyable field of the binding to be partially consumed or initialized:
 
 ```swift
@@ -40,8 +40,8 @@ var request = MicroServiceRequest()
 let _ = s.readSocket // Error! Cannot partially consume s
 ```
 
-Since these rules apply to inout arguments, this also applies to stored fields
-of self in mutating methods:
+Since these rules apply to inout arguments and mutating self is passed inout,
+this also applies to stored fields of self in mutating methods:
 
 ```swift
 extension MicroServiceRequest {
@@ -55,8 +55,8 @@ extension MicroServiceRequest {
 ```
 
 One can still take advantage of `self` being passed inout to mutating methods to
-retrieve the field by using the `consume` operator and reinitializing `self`
-before the end of the function:
+retrieve the field by using the `consume` operator on self and reinitializing
+`self` before the end of the function:
 
 ```swift
 extension MicroServiceRequest {
@@ -243,11 +243,11 @@ struct StructWithDeinit2 {
     deinit { ... }
 
     consuming func consumeValue() {
-        let _ = noncopyableField1
+        let _ = self.noncopyableField1
     } // Error! self has a deinit but is not fully initialized before end of lifetime
 
     consuming func consumeValue2() {
-        let _ = noncopyableField1
+        let _ = self.noncopyableField1
         discard self // Ok! We discard self so the deinit will not run.
     }
 }
@@ -431,7 +431,7 @@ struct FileDescriptors : ~Copyable {
     deinit {}
 
     private consuming func getFD1() -> Int {
-        let result = fd1
+        let result = self.fd1
         discard self
         return result
     }
@@ -447,7 +447,7 @@ variables in these contexts to be reinitialized after being discarded.
 ```swift
 extension StructWithDeinit2 {
     mutating func test() -> E {
-        let result = noncopyableField1
+        let result = self.noncopyableField1
         discard self
         self = StructWithDeinit2() // No Deinit Runs
         return result
@@ -485,12 +485,16 @@ let _ = consume x.copyableField // We invalidate copyableField
 
 ## Alternatives considered
 
-### Partial Liveness always disables Deinit
+### Partial invalidation always disables Deinit
 
 We could make it so that any partial consumption or initialization would disable
 the deinit. This would work against Swift's goals of being a safe easy to use
 language since we would be introducing a very easy way to break a library
-invariant that would be hard to audit in comparison to deinit.
+invariant that would be hard to audit in comparison to deinit:
+
+```swift
+ADD EXAMPLE HERE
+```
 
 ### Partial Consumption outside of Methods
 
