@@ -100,7 +100,8 @@ separate helper function just to close the socket.
 ## Proposed solution
 
 Given this reduction in expressivity it is natural to ask... can we improve this
-situation by allowing for self to be partially initialized:
+situation by allowing for self to be partially initialized allowing for us to
+write the following code:
 
 ```swift
 extension MicroServiceRequest {
@@ -113,8 +114,8 @@ extension MicroServiceRequest {
 }
 ```
 
-We propose relaxing these restrictions to allow for code like the above to be
-written.
+and avoid needing to destroy the rest of the MicroServiceRequest just to close
+and thus consume our read socket.
 
 ## Detailed design
 
