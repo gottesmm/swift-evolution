@@ -578,4 +578,4 @@ to maintain the invariant, they should not have exposed the stored field.
 
 ## Acknowledgments
 
-Thanks to Kavon, JoeG, and many others.
+Thanks to Kavon, JoeG, Andrew Trick and many others.
