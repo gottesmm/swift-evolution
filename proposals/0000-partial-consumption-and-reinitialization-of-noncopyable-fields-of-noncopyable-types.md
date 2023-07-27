@@ -156,7 +156,7 @@ func g(_ x: consuming CopyableType) {
 }
 ```
 
-### NonCopyable Values without Deinits
+### NonCopyable Bindings without Deinits
 
 A binding without a deinit like `x` above, can be deconstructed and its
 remaining fields will be cleaned up at the end of `x`'s maximized lifetime
@@ -207,16 +207,12 @@ extension S : ~Copyable {
 }
 ```
 
-### NonCopyable Values with Deinits
+### NonCopyable Bindings with Deinits
 
-NonCopyable values with a deinit can only be partially consumed or reinitialized
-if:
-
-1. The value is completely reinitialized before end of scope.
-2. The `discard` operator is explicitly used to disable the value's deinit.
-
-If there exists a path through the program where neither of the above conditions
-are true, the compiler will emit an error:
+NonCopyable bindings with a deinit can only be partially consumed or reinitialized
+if the value is completely reinitialized before the end of its maximal lifetime
+scope. If there exists a path through the program where this condition is not
+true, the compiler will emit an error:
 
 ```swift
 struct StructWithDeinit : ~Copyable {
@@ -246,35 +242,24 @@ struct StructWithDeinit2 {
     consuming func consumeValue() {
         let _ = self.noncopyableField1
     } // Error! self has a deinit but is not fully initialized before end of lifetime
-
-    consuming func consumeValue2() {
-        let _ = self.noncopyableField1
-        discard self // Ok! We discard self so the deinit will not run.
-    }
 }
 ```
 
-The reasons for this behavior is that:
+The reasons for this behavior is that Swift requires a value to be completely
+live at the point in which a deinit is applied. This implies if we were to allow
+for such values to be partially initialized at the end of its lifetime, we could
+not call the deinit. This would result in us being forced to clean up the
+partially initialized value in pieces since that is the only thing that we
+/could/ do.
 
-1. Swift requires a value to be completely live at the point in which a deinit
-   is applied. This implies if we were to allow for such values to be partially
-   initialized at the end of its lifetime, we could not call the deinit. This
-   would result in us being forced to clean up the partially initialized value
-   in pieces since that is the only thing that we /could/ do.
-
-2. Deinits are used to clean up resources that are uniquely owned (consider a
-   file descriptor) and thus in such situations a key part of the API contract
-   that an author is providing to the user. Requring only an assignment
-   operation to turn off such a deinit would result in code bases where such
-   type contracts are simple to break and hard to track down or audit if done in
-   error. In contrast, requiring an explicit discard along paths where such
-   behavior is desired provides an explicit opt in that avoids such pitfalls.
+In the future, we also want to allow for bindings to be partially consumed or
+reinitialized if the bindigns has `discard` applied to it along a path. For the
+purposes of this proposal, we place `discard` in the (extension section)[Partial Consumption/Reinitialization of NonCopyable Types with a Deinit using Discard] since we
+have not fully defined `discard`'s semantics in all situations.
 
 By requiring the value to be completely initialized (allowing the deinit to be
-called) or requiring an explicit discard to be used (making it easy to tell
-where deinits are being disabled), we create a programming model where the user
-can partially consume/reinit types with deinits in a safe manner with the
-compiler's guidance.
+called), we create a programming model where the user can partially
+consume/reinit types with deinits in a safe manner with the compiler's guidance.
 
 ### Source stability guarantees and `@frozen`
 
@@ -414,7 +399,41 @@ versioning perspective as talked about in the section above.
 
 ## Future directions
 
-### Discard in Mutating Methods
+### Partial Consumption/Reinitialization of NonCopyable Types with a Deinit using Discard
+
+Beyond relying just on reinitialization of all fields to allow for partial
+initialization, we in the future also want to loosen the reinitialization rules
+to allow for a user to partially reinitialize fields if the `discard` operator
+is explicitly used to disable a value's deinit along a path.
+
+We believe that this is a superior alternative to causing partial consumption or
+initialization to disable the deinit since doing so would work against Swift's
+goals of being a safe easy to use language since we would be introducing a very
+easy way to break a library invariant that would be hard to audit in comparison
+to `discard`:
+
+```swift
+struct S : ~Copyable {
+    var noncopyableField: E
+    deinit {
+        logError()
+    }
+}
+
+let x = S()
+let _ = x.e // Deinit is not run anymore and we do not log our error.
+```
+
+Not requiring `discard` would be especially harmful since deinits are often used
+to clean up resources that are uniquely owned (consider a file descriptor) and
+thus in such situations a key part of the API contract that an author is
+providing to the user. Requiring only an assignment operation to turn off such a
+deinit would result in code bases where such type contracts are simple to break
+and hard to track down or audit if done in error. In contrast, requiring an
+explicit `discard` along paths where such behavior is desired provides an
+explicit opt in that avoids such pitfalls.
+
+### `discard` in mutating methods
 
 Another common pattern we expect users to want to be able to implement is to be
 able to return a struct's internal state via a mutating function without
@@ -486,25 +505,6 @@ let _ = consume x.copyableField // We invalidate copyableField
 ```
 
 ## Alternatives considered
-
-### Partial invalidation always disables Deinit
-
-We could make it so that any partial consumption or initialization would disable
-the deinit. This would work against Swift's goals of being a safe easy to use
-language since we would be introducing a very easy way to break a library
-invariant that would be hard to audit in comparison to deinit:
-
-```swift
-struct S : ~Copyable {
-    var noncopyableField: E
-    deinit {
-        logError()
-    }
-}
-
-let x = S()
-let _ = x.e // Deinit is not run anymore and we do not log our error.
-```
 
 ### Partial Consumption outside of Methods
 
