@@ -167,7 +167,7 @@ Each of these cases allow for values to be used in a non-local manner and as a
 result require us to use dynamic exclusivity checks to ensure that we can access
 the value safely:
 
-```
+```swift
 class C {
     var field: CopyableType
 }
@@ -175,13 +175,12 @@ class C {
 var c: C
 var x = c.field
 
-->
-
-// Pseudo-code
-field_addr = addr(c.field)
-exclusive_field_addr = begin_dynamic_access(field_addr)
-x = load(exclusive_field_addr)
-end_dynamic_access(exclusive_field_addr)
+// Lowers to the following pseudo-code.
+//
+// field_addr = addr(c.field)
+// exclusive_field_addr = begin_dynamic_access(field_addr)
+// x = load(exclusive_field_addr)
+// end_dynamic_access(exclusive_field_addr)
 ```
 
 If we were to allow for partial invalidation, we would need to ensure that the
