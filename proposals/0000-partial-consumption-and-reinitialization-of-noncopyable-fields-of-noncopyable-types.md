@@ -142,9 +142,10 @@ let _ = x.copyableField
 useK(x.copyableField) // This is ok since we copied x.copyableField above.
 ```
 
-Given a copyable `borrowing` or`consuming` binding, since the underlying type is
-copyable, we know its fields must also be copyable implying that we will just
-copy them without invalidating any part of the underlying binding:
+Given a non-reference typed copyable `borrowing` or`consuming` binding, since
+the underlying type is copyable, we know its fields must also be copyable
+implying that we will just copy them without invalidating any part of the
+underlying binding:
 
 ```swift
 func f(_ x: borrowing CopyableType) {
@@ -155,11 +156,44 @@ func g(_ x: consuming CopyableType) {
 }
 ```
 
+In the following situations, we explicitly do not allow for partial invalidation
+due to memory safety considerations:
+
+1. noncopyable fields of reference types.
+2. noncopyable globals.
+3. noncopyable mutable captures.
+
+Each of these cases allow for values to be used in a non-local manner and as a
+result require us to use dynamic exclusivity checks to ensure that we can access
+the value safely:
+
+```
+class C {
+    var field: CopyableType
+}
+
+var c: C
+var x = c.field
+
+->
+
+// Pseudo-code
+field_addr = addr(c.field)
+exclusive_field_addr = begin_dynamic_access(field_addr)
+x = load(exclusive_field_addr)
+end_dynamic_access(exclusive_field_addr)
+```
+
+If we were to allow for partial invalidation, we would need to ensure that the
+reinitialization of the value happened within the dynamic exclusivity scope
+since otherwise other non-local accesses to the memory would be able to see
+invalidated memory breaking memory safety.
+
 ### NonCopyable Bindings without Deinits
 
-A binding without a deinit like `x` above, can be deconstructed and its
-remaining fields will be cleaned up at the end of `x`'s maximized lifetime
-scope:
+A binding without a deinit that is partially initialized will be deconstructed
+at end of scope and its remaining fields will be cleaned up at the end of the
+binding's maximized lifetime scope:
 
 ```swift
 struct S : ~Copyable {
