@@ -119,10 +119,9 @@ and thus consume our read socket.
 
 ## Detailed design
 
-Swift's consumption and re-initialization rules for noncopyable types will be
+Swift's consumption and reinitialization rules for noncopyable types will be
 changed to be "field sensitive". This means that the language will now allow for
-a noncopyable binding to have its noncopyable fields be invalidated on a field
-by field basis:
+noncopyable fields of noncopyable binding to be invalidated:
 
 ```swift
 var request: MicroServiceRequest
