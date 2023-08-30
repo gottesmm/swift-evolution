@@ -1,78 +1,184 @@
 # Send Non-Sendable
 
 * Proposal: [SE-NNNN](NNNN-filename.md)
-* Authors: [Joshua Turcotti](https://github.com/jturcotti)
+* Authors: [Michael Gottesman](https://github.com/gottesmm) [Joshua Turcotti](https://github.com/jturcotti)
 * Review Manager: TBD
 * Status: **Awaiting implementation** or **Awaiting review**
-* Vision: *if applicable* [Vision Name](https://github.com/apple/swift-evolution/visions/NNNNN.md)
-* Roadmap: *if applicable* [Roadmap Name](https://forums.swift.org/...))
-* Bug: *if applicable* [apple/swift#NNNNN](https://github.com/apple/swift/issues/NNNNN)
 * Implementation: available on public Github: [SendNonSendable.cpp](https://github.com/apple/swift/blob/main/lib/SILOptimizer/Mandatory/SendNonSendable.cpp)
 * Upcoming Feature Flag: `SendNonSendable`
 * Review: ([pitch](https://forums.swift.org/t/pitch-safely-sending-non-sendable-values-across-isolation-domains/66566))
 
 ## Introduction
 
-Swift Concurrency splits memory into the "isolation domains" of various actors and tasks. Computations isolated to distinct domains can execute concurrently, so to prevent data races it is vital that no mutable state is simultaneously accessible from multiple domains. The Swift type system ensures this separation property by allowing only references to deeply immutable values to be communicated between isolation domains. This is enforced through `Sendable` checking; only deeply immutable values can safely conform to the `Sendable` protocol, and only values that conform to the `Sendable` protocol can cross isolation domains.
-
-Unfortunately, requiring `Sendable` conformance for all values that cross isolation domains is very restrictive in practice. For example, mutable objects cannot be constructed by one actor and then sent to another, even if they are never accessed except to be constructed then sent. A flow-sensitive analysis that determines whether values of arbitrary type can be safely sent without introduing data races would allow this pattern, and thus provide a large increase in the expressivity of Swift concurrency.
-
-The `SendNonSendable` pass, currently available as an experimental feature, implements such a flow-sensitive analysis. It tracks all non-`Sendable` values within function scopes, allowing them to be sent between isolation domains but marking them as "transferred" when they are. Transferred values can henceforth not be accessed. This ensures that any potential data races resulting from concurrent access in the sending and receiving domains are avoided. The crux of this analysis is grouping values that could alias or reference each other into static "regions". Sending a value should transfer away the value itself and all other aliasing or referencing values in its region, as accessing those values after the send could also yield a race.
-
-This pass allows for greater flexibility of programming with Swift concurrency, without sacrificing data-race freedom or ergonomics.
+Swift Concurrency splits assigns mutable values to specific "isolation domains"
+determined by actor and task boundaries. Code running in distinct "isolation
+domains" are allowed to execute concurrently. As a result, as per `SE-SENDABLE`
+only `Sendable` values are allowed to be passed over an "isolation boundary"
+from one "isolation domain" into another in order to prevent data races. In
+practice this turns out to be a very significant restriction. In this document,
+we propose loosening these rules by introducing a new SIL analysis that
+determines whether an arbitrary non-`Sendable` value can be safely be sent
+across "isolation boundary".
 
 ## Motivation
 
-The following code demonstrates a situation in which:
-
-- `NearestNeighbors` is a class that cannot safely be made `Sendable` due to the presence of cycles
-- `NearestNeighbors.init` is a very expensive operation
-- Ultimately, a `NearestNeighbors` instance needs to be displayed to the user via an `addToDisplay` call
-
-The code illustrates a reasonable attempt to use the `NearestNeighbors` class to model and display location data.
+`SE-SENDABLE` states that non-`Sendable` values cannot be sent across /any/
+"isolation boundary". Thus given the following code:
 
 ```swift
-// A representation of location data that associates each point with `numNeighbors`
-// of its nearest neighbors in a dataset. This yields connected clusters of
-// points, one root of each of which is stored in `rootPoints`.
-class NearestNeighbors { 
-  class DataPoint {
-    // point to the `numNeighbors` nearest neighbors of this point
-    var nearestPoints : [DataPoint]
-    ...
-  }
-  
-  let numNeighbors : Int
-  var rootPoints : [DataPoint]
-  ...
+// Not Sendable
+class Client { ... }
+
+actor BankAccount {
+  var id : Int = 5
+  var client = Client()
+
+  init(_ newID: Int, _ newPersonalInfo: Client) { ... }
 }
-	
-// Build the nearest neighbors graph, associating each point in the dataset `data`
-// with its `numNeighbors` nearest neighbors, and storing a point from each resulting
-// cluster in `rootPoints`.
-// EXPENSIVE operation
-func computeNearestNeighbors(data : LocationData, numNeighbors : Int = 10) -> NearestNeighbors { ... }
 
-// display a nearest neighbors graph to the user
-// UI operation - so must be `@MainActor`
-@MainActor func addToDisplay(neighbors : NearestNeighbors) { ... }
-
-// take location data, build a nearest neighbors graph for it, and display it to the user
-func computeAndDisplayData(data : LocationData) async {
-  let neighbors = computeNearestNeighbors(data: data)
-  await addToDisplay(neighbors) // warning: passing argument of non-sendable type 'NearestNeighbors' into @MainActor-isolated context may introduce data races
+func createNewAccount() -> BankAccount {
+  let c = Client()
+  let b = BankAccount(5, c)
+  return b
 }
 ```
 
-Unfortunately, current Swift strict concurrency does not allow this code. Since `computeAndDisplayData` is a `nonisolated` function, and `addToDisplay` is `@MainActor`-isolated, the call `await addToDisplay(neighbors)` crosses isolation domains, and thus is not permitted to pass non-sendable values. To make the compiler accept this code, there are three options:
+we get an error with strict concurrency enabled since `Client` is not sendable:
 
-- Disable strict concurrency checking (undesirable)
-- Make `NearestNeighbors` `Sendable` (not possible because can't create a cyclic graph with only `let` bindings)
-- Make `computeAndDisplayData` `@MainActor`-isolated (undesirable because this would cause the main thread to hang while computing the nearest neighbors graph)
+```
+bank.swift:16:26: warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
+  let b = BankAccount(5, c)
+                         ^
+bank.swift:2:7: note: class 'Client' does not conform to the 'Sendable' protocol
+class Client {
+      ^
+```
 
-There is thus currently no way to build and display this graph-like `NearestNeighbor`s object without giving up either safety (data-race freedom) or performance. 
+To the naive human eye this is overly conservative since there cannot be any
+races in this code since there aren't any further uses of the `Client` outside
+of `BankAccount`'s isolation domain. If the language rules allowed the compiler
+to consider those uses, this code would be valid and safe.
 
 ## Proposed solution
+
+To allow for code like the above to be written, we propose the introducing ofa
+new SIL-analysis that considers uses to determine if it is safe to send a
+non-`Sendable` value across an isolation domain. This is done by introducing the
+notion of a Reachable Value Set. 
+
+## Detailed Design
+
+To define such an analysis, we introduce some additional concepts which we
+define in the following sections.
+
+### Reachable Value Sets
+
+Given a non-Sendable value `v`, we begin by imprecisely defining `v`'s RVS or
+"reachable value set" at a specific program point `p` as the set of program
+non-Sendable values that `v` might alias directly at `p` or that can be accessed
+via recursive accesses to `v`'s methods and properties at `p`. So in the
+following:
+
+```swift
+// Not sendable since it is a class
+class ClientMetadata { ... }
+
+// Not sendable since it is a class
+class Client {
+    var name: String
+    var metadata: ClientMetadata
+}
+
+func createNewClient() -> Client {
+  let metadata = ClientMetadata()                               (1)
+  let client = Client(name: "Joanna Smith", metadata: metadata) (2)
+  ...
+}
+```
+
+`metadata` at program point `(1)` is in its own reachable value set located in
+the global "isolation domain" since it was just constructed. Then at `(2)`, we
+construct `client` passing `metadata` to `client`'s initializer resulting in
+`metadata` and `client` being in the same reachable value set.
+
+In the above example, `metadata` is a field of `client` and thus is reachable
+from `client` implying via our informal definition that they must be in the same
+region. But what if we did not have visibility into `client`'s type and just
+knew that its initializer took a `ClientMetadata`. In such a situation, to be
+conservatively correct, we must still consider `metadata` and `client` to be in
+the same RVS since we do not know what `client`'s initializer will actually do
+with `metadata`.
+
+This leads us to the formal rule that guides whether two values are within the
+same RVS: Given a function `y = f(x0, ..., xn)`:
+
+1. All non-Sendable `xi` are in the same RVS after `f` executes.
+2. If any of `xi` are non-Sendable then, `y` is in the same region as the
+   `xi`. If all `xi` are Sendable, then `y` is within a RVS that consists only
+   of `y`.
+
+Now lets apply this rule to specific examples to see it in action:
+
+* ``let y = x.f``. Accessing a field `f` on a non-sendable value `x` results in
+  a value `y` that must be in the same RVS as `x`. This follows from `(2)`
+  since formally a property access is equivalent to calling a getter passing `x`
+  as self.
+
+* ``let y = x``. Copying `x` into a new value `y` results in `y` being in the
+  same RVS as `x`. This again follows from `(2)` since formally a copy is
+  equivalent to calling a property on `x` that takes `x` as self and returns a
+  copy of `x`.
+
+* ``y.f = x``. Assigning `x` into a field `y.f` results in `y.f` being in the
+  same RVS as `x`. This again follows from `(2)`.
+
+* ``closure = { useX(x); useY(y) }``. Capturing non-sendable values `x` and `y`
+  results in `x` and `y` being in the same RVS. This can be viewed as a
+  consequence of `(2)` since `x` and `y` are formally arguments to the closure
+  formation. This also means that the closure must be part of the same RVS.
+
+* TODO: Add vars
+* TODO: Switches
+
+Thus using our simple two rules above, we can derive the necessary rules for
+conservative reachable value sets.
+
+### Reachable Value Sets and Control Flow
+
+Now that we understand how non-Sendable values become part of the same `RVS`, we
+need to consider how they are affected by control flow. Given a program point
+`p` at a control flow join point, we say that `x` and `y` must be in the same
+RVS if in they are also in the same RVS in any of the predecessor code
+blocks. For instance in the following code:
+
+```swift
+
+```
+
+### Reachable Value 
+
+Given a copyable value `v`, new values are added to `v`'s reachable value set
+via the following rules:
+
+* `let x = v`. Creating a new binding `x` for `v`. Since Swift copies are 
+
+
+
+1. Conservatively grouping all non-`Sendable` values in the function into
+   "reachable sets". A "reachable set" consists of values that may alias and
+   as well as any values 
+
+1. Analyzing all uses in the function where the isolation domain crossing
+   occurs.
+2. Given any such uses that occur after the isolation domain crossing occurs,
+   determine if the value or any value reachable from that value.
+
+the totality of uses of
+a value in the function where the isolation crossing occurs and determining in a
+conservative manner if any values that may alias the non-`Sendable` is used
+later in the same function.
+
+It does this by 
 
 To a human programmer, the function `computeAndDisplayData` is clearly safe. Swift concurrency prevents `neighbors` from being sent across isolation domains to the main actor because of the potential for the main actor to race with the remainder of `computeAndDisplayData` over access to `neighbors`. But `computeAndDisplayData` doesn't access `neighbors` again after the call, and doesn't allow it to escape. What is needed is a pass that can tell the difference between safe functions like:
 
