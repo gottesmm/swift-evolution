@@ -10,21 +10,20 @@
 
 ## Introduction
 
-Swift Concurrency splits assigns mutable values to specific "isolation domains"
+Swift Concurrency assigns mutable values to specific "isolation domains"
 determined by actor and task boundaries. Code running in distinct "isolation
-domains" are allowed to execute concurrently. As a result, as per `SE-SENDABLE`
-only `Sendable` values are allowed to be passed over an "isolation boundary"
-from one "isolation domain" into another in order to prevent data races. In
-practice this turns out to be a very significant restriction. In this document,
-we propose loosening these rules by introducing a new SIL analysis that
-determines whether an arbitrary non-`Sendable` value can be safely be sent
-across "isolation boundary".
+domains" are allowed to execute concurrently. As a result, `SE-SENDABLE` forbids
+non-`Sendable` values from being passed over an "isolation boundary" in order to
+define away data races. In practice this turns out to be a very significant
+restriction. In this document, we propose loosening these rules by introducing a
+new SIL analysis that determines whether an arbitrary non-`Sendable` value can
+be safely be sent across "isolation boundary".
 
 ## Motivation
 
 `SE-SENDABLE` states that non-`Sendable` values cannot be sent across /any/
-"isolation boundary". Thus given the following code that represents a Client's
-account at a bank with multiple types of accounts:
+"isolation boundary". Thus given the following code that opens a new
+ClientAccount for a Client at a bank:
 
 ```swift
 // Not Sendable
@@ -45,8 +44,8 @@ func openNewAccount() -> ClientAccount {
 }
 ```
 
-we get an error when strict concurrency is enabled since `Client` is not
-sendable:
+we get an error in `openNewAccount` when strict concurrency is enabled since
+`Client` is not sendable:
 
 ```swift
 bank.swift:16:26: warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
@@ -58,19 +57,19 @@ class Client {
 ```
 
 This is overly conservative since there cannot be any races in this code since
-there aren't any further uses of the `Client` outside of `ClientAccount`'s
-isolation domain. If the language rules allowed the compiler to consider those
-uses, this code would be valid and safe.
+`c` does not have any further uses outside of `ClientAccount`'s isolation domain
+once `c` has been transferred to `client`. If the language rules allowed the
+compiler to consider the uses of `c`, this code could be proven as being race
+free and thus accepted by the compiler.
 
 ## Proposed solution
 
 To allow for code like the above to be written, we propose the introduction of a
 new flow sensitive SIL-analysis that considers the uses of non-`Sendable` values
 to determine if it is safe to send a non-`Sendable` value across an isolation
-domain boundary. To do this instead of reasoning about specific values, the pass
-reasons about "regions".
-
-A "region" is an equivalence class of non-`Sendable` values at a program point `p` where two
+domain boundary. To do this we reason about the uses of equivalence classes of
+values called "regions" instead of the uses of individual values. A "region" is
+an equivalence class of non-`Sendable` values at a program point `p` where two
 values `v1` and `v2` are considered to be in the same region at `p` if:
 
 1. `v1` and `v2` are reference types that /may alias/ each other.
@@ -100,12 +99,12 @@ and are not reachable from each other. But, once line `(2)` is executed, since
 `m` is reachable from `c` via `c.metadata`, `m` and `c` must be in the same
 region.
 
-In order for us to be able to statically reason at compile time using regions,
-we reason conservatively that if two values cannot be proven to not-alias or not
-be reachable from each other, we consider them to be part of the same
-region. For example, if we wanted to implement a routine on our ClientAccount
-the returned the individual bank account's with the largest and smallest amount
-of money contained within them:
+In order for us to be able to reason at compile time using regions, we must
+conservatively conclude that two values are part of the same region if they
+cannot be proven to not-alias or be reachable from each other. For example, if
+we wanted to implement a routine on `ClientAccount` that returned the individual
+bank accounts with the largest and smallest amount of money contained within
+them:
 
 ```swift
 class BankAccount {
@@ -124,12 +123,21 @@ extension ClientAccount {
 then at (1), we would need to consider max and min to be part of the same region
 since we do not know if they alias.
 
+From a concurrency perspective, region's provide a powerful manner to determine if two values
 
+Given a region `r` at a program point `p`, we know that if any element of `r` is
+transferred from one isolation domain to another at `p`:
 
-Since we know that two non-`Sendable` values `v1` and `v2` that are not in the
-same region cannot alias or be reachable from each other, we know that if we
-were to transfer `v1` from one isolation domain to another isolation domain, we
-would not be transferring `v2` as well. 
+1. `r` must contain all local values that 
+1. We must conservatively assume that /all/ other elements of `r` must also be
+transferred to the other isolation domain as well.
+2. The region contains all values that could have been transferred 
+
+Since we know that two non-`Sendable` values `v1` and `v2` that are in the same
+region may alias or be reachable from each other, we must assume that if we
+transfer `v1` from one isolation domain to another, we conservatively may have
+also transfered `v2` as well. This yields the general rule that when a single
+element of a region is transferred from one is
 
 ## Detailed Design
 
