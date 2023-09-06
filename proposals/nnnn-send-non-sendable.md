@@ -60,25 +60,83 @@ This is overly conservative since there cannot be any races in this code since
 `c` does not have any further uses outside of `ClientAccount`'s isolation domain
 once `c` has been transferred to `client`. If the language rules allowed the
 compiler to consider the uses of `c`, this code could be proven as being race
-free and thus accepted by the compiler.
+free since there are no further uses of `c`.
 
 ## Proposed solution
 
 To allow for code like the above to be written, we propose the introduction of a
-new flow sensitive SIL-analysis that considers the uses of non-`Sendable` values
-to determine if it is safe to send a non-`Sendable` value across an isolation
-domain boundary. To do this we reason about the uses of equivalence classes of
-values called "regions" instead of the uses of individual values. A "region" is
-an equivalence class of non-`Sendable` values at a program point `p` where two
-values `v1` and `v2` are considered to be in the same region at `p` if:
+new flow sensitive SIL-analysis that emits error diagnostics at use sites of
+non-`Sendable` values that previously were transferred to a different isolation
+domain.
 
-1. `v1` and `v2` are reference types that /may alias/ each other.
+Noting that an alias of a value being transferred to another isolation domain
+can result in races with the original value, the pass avoids reasoning about
+values directly and instead conservatively reasons about equivalence classes of
+values called "regions". At a specific program point `p`, two values `x` and `y`
+are defined to be within the same region if:
 
-2. `v2` (`v1`) might be referenceable from `v1` (`v2`) via iterative access to
-   `v1`'s (`v2`'s) properties.
+1. `x` may alias `y`.
+2. `x` might be referenceable from `y` via iterative access to `y`'s properties.
 
-If at `p`, `v1` and `v2` are not in the same region then code at `p` that is
-applied to `v1` cannot indirectly affect `v2`.
+This definition ensures that if `x` and `y` are in a different region from each
+other at `p`, then code using `x` cannot affect the `y` directly. This is called
+the "isolation property" of regions.
+
+For example, if we wanted to implement a routine on `ClientAccount` that
+returned the individual bank accounts with the largest and smallest amount of
+money contained within them:
+
+```swift
+class BankAccount {
+  var amount: Double
+}
+
+extension ClientAccount {
+  func getLargestAndSmallest() -> (BankAccount, BankAccount)  {
+     let max = self.accounts.max { $0.amount < $1.amount }
+     let min = self.accounts.min { $0.amount < $1.amount }       (1)
+     return (min, max)
+  }
+}
+```
+
+then at (1), we would need to consider max and min to be part of the same region
+since we do not know if they alias.
+
+Since we know that values that are in different regions are isolated 
+
+Given two variables `x` and `y` in an isolation domain `A` that are in separate
+regions, using the definition above we know that if we were to transfer `x` to a
+different isolation domain `B`
+
+then if `x`
+is transferred across from an isolation domain `A` to an isolation domain `B`,
+any uses of `y` after the transfer in `A` cannot cause a race with any use of
+`x` in `B` since no use of `x` could 
+
+
+
+This implies that if a value `v` within a region `r` is transferred across an
+isolation boundary, then conservatively all values within `r` must also be
+transferred. Since regions are conservatively constructed, we know that no other
+values visible at `p` could be transferred beyond the values in `r`.
+
+
+Importantly, all regions are complete: since they are constructed
+conservatively, we can conclude that if two values `x`, `y` are not within the
+same region at `p`, then `x` crossing an isolation boundary at `p` will not
+result in `y` also crossing the isolation boundary.
+
+If `x` crosses an isolation domain at `p`, then if `y` is within the same region
+as `x`, `y` must have moved to another isolation domain as well. This 
+
+If at `p`, `x` is transferred to a different isolation domain then `v2` and all
+other values in `r` must also be transferred into the other isolation domain as
+well. This allows us to conclude that if there is a use later of any value in
+`r` after `p` then we may have a potential race.
+
+
+// DETAILED DESIGN
 
 Since a value's region is defined per program point, the specific region that a value
 belongs to can change as a program executes. For instance:
