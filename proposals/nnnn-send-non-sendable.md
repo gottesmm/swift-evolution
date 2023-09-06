@@ -23,48 +23,113 @@ across "isolation boundary".
 ## Motivation
 
 `SE-SENDABLE` states that non-`Sendable` values cannot be sent across /any/
-"isolation boundary". Thus given the following code:
+"isolation boundary". Thus given the following code that represents a Client's
+account at a bank with multiple types of accounts:
 
 ```swift
 // Not Sendable
 class Client { ... }
+class BankAccount { ... }
 
-actor BankAccount {
-  var id : Int = 5
-  var client = Client()
+actor ClientAccount {
+  var client: Client
+  var accounts: [BankAccount] = []
 
-  init(_ newID: Int, _ newPersonalInfo: Client) { ... }
+  init(_ client: Client) { ... }
 }
 
-func createNewAccount() -> BankAccount {
+func openNewAccount() -> ClientAccount {
   let c = Client()
-  let b = BankAccount(5, c)
+  let b = ClientAccount(c)
   return b
 }
 ```
 
-we get an error with strict concurrency enabled since `Client` is not sendable:
+we get an error when strict concurrency is enabled since `Client` is not
+sendable:
 
-```
+```swift
 bank.swift:16:26: warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
-  let b = BankAccount(5, c)
-                         ^
+  let b = ClientAccount(c)
+                        ^
 bank.swift:2:7: note: class 'Client' does not conform to the 'Sendable' protocol
 class Client {
       ^
 ```
 
-To the naive human eye this is overly conservative since there cannot be any
-races in this code since there aren't any further uses of the `Client` outside
-of `BankAccount`'s isolation domain. If the language rules allowed the compiler
-to consider those uses, this code would be valid and safe.
+This is overly conservative since there cannot be any races in this code since
+there aren't any further uses of the `Client` outside of `ClientAccount`'s
+isolation domain. If the language rules allowed the compiler to consider those
+uses, this code would be valid and safe.
 
 ## Proposed solution
 
-To allow for code like the above to be written, we propose the introducing ofa
-new SIL-analysis that considers uses to determine if it is safe to send a
-non-`Sendable` value across an isolation domain. This is done by introducing the
-notion of a Reachable Value Set. 
+To allow for code like the above to be written, we propose the introduction of a
+new flow sensitive SIL-analysis that considers the uses of non-`Sendable` values
+to determine if it is safe to send a non-`Sendable` value across an isolation
+domain boundary. To do this instead of reasoning about specific values, the pass
+reasons about "regions".
+
+A "region" is an equivalence class of non-`Sendable` values at a program point `p` where two
+values `v1` and `v2` are considered to be in the same region at `p` if:
+
+1. `v1` and `v2` are reference types that /may alias/ each other.
+
+2. `v2` (`v1`) might be referenceable from `v1` (`v2`) via iterative access to
+   `v1`'s (`v2`'s) properties.
+
+If at `p`, `v1` and `v2` are not in the same region then code at `p` that is
+applied to `v1` cannot indirectly affect `v2`.
+
+Since a value's region is defined per program point, the specific region that a value
+belongs to can change as a program executes. For instance:
+
+```swift
+class ClientMetadata { ... }
+class Client {
+    var metadata: ClientMetadata
+}
+
+var c = Client()
+let m = ClientMetadata() (1)
+c.metadata = m           (2)
+```
+
+at line `(1)`, `m` and `c` are part of separate regions since they cannot alias
+and are not reachable from each other. But, once line `(2)` is executed, since
+`m` is reachable from `c` via `c.metadata`, `m` and `c` must be in the same
+region.
+
+In order for us to be able to statically reason at compile time using regions,
+we reason conservatively that if two values cannot be proven to not-alias or not
+be reachable from each other, we consider them to be part of the same
+region. For example, if we wanted to implement a routine on our ClientAccount
+the returned the individual bank account's with the largest and smallest amount
+of money contained within them:
+
+```swift
+class BankAccount {
+  var amount: Double
+}
+
+extension ClientAccount {
+  func getLargestAndSmallest() -> (BankAccount, BankAccount)  {
+     let max = self.accounts.max { $0.amount < $1.amount }
+     let min = self.accounts.min { $0.amount < $1.amount }       (1)
+     return (min, max)
+  }
+}
+```
+
+then at (1), we would need to consider max and min to be part of the same region
+since we do not know if they alias.
+
+
+
+Since we know that two non-`Sendable` values `v1` and `v2` that are not in the
+same region cannot alias or be reachable from each other, we know that if we
+were to transfer `v1` from one isolation domain to another isolation domain, we
+would not be transferring `v2` as well. 
 
 ## Detailed Design
 
@@ -154,6 +219,9 @@ blocks. For instance in the following code:
 ```swift
 
 ```
+
+### NonSendable Reachable Value Sets
+
 
 ### Reachable Value 
 
