@@ -26,9 +26,20 @@ non-`Sendable` value can be safely be sent across "isolation boundary".
 `ClientAccount` for a `Client` at a bank:
 
 ```swift
-// Not Sendable
+/// Not Sendable
 class Client { ... }
-class BankAccount { ... }
+
+/// Contains state that makes it non-Sendable
+struct BankAccount {
+   /// The amount of funds available in this bank account.
+   var amount: Double
+
+   /// Set to true if this account is frozen and money cannot be removed
+   /// from the account.
+   var isFrozen: Bool
+
+   /// ... Additional non-Sendable state ///
+}
 
 actor ClientAccount {
   var client: Client
@@ -68,8 +79,8 @@ concurrency model. This will impede the development of new libraries that
 pervasively use concurrency or the updating of old libraries to use concurrency
 by requiring pervasive auditing of non-`Sendable` types to determine
 `Sendability`. To understand the scale of the problem in Apple's public SDK
-alone there are ~100k classes each with their own set of APIs implying that
-multiples of ~100k APIs would need to be audited. By introducing this flow
+alone there are ~200k classes each with their own set of APIs implying that
+multiples of ~200k APIs would need to be audited. By introducing this flow
 sensitive model, we can avoid that problem and provide a light intuitive model
 for the use of such non-`Sendable` types.
 
@@ -148,26 +159,28 @@ other. Thus the use of joannasTransaction at `(2)` must be safe and the analysis
 must not emit an error.
 
 In contrast, if we wanted to implement an auditing routine on `ClientAccount`
-that audited 2 random bank accounts of a client:
+that audited two random bank accounts of a client:
 
 ```swift
-class Client { }
+class Client { ... }
 class BankAccount {
   var amount: Double = 0.0
 }
 
 actor ClientAccount {
   var client: Client
-  var accounts: [BankAccount] = []
-  var account2: BankAccount? = nil
+  var accounts: [BankAccount] = [BankAccount()]
 
-  init(_ client: Client, _ initialBalance: Double) { fatalError() }
+  /// Zeroth bank account is always the checking account.
+  var checkingAccount: BankAccount { accounts[0] }
+
+  init(_ client: Client, _ initialBalance: Double) { ... }
 }
 
 actor AccountAuditing {
-  func prepareAudit(_ x: BankAccount) { fatalError() }
+  func prepareAudit(_ x: BankAccount) { ... }
 
-  static var auditor: AccountAuditing { fatalError() }
+  static var auditor: AccountAuditing
 }
 
 extension ClientAccount {
@@ -197,12 +210,12 @@ Sendability.
 
 ## Detailed Design
 
-### Regions in more detail
+### Isolation Regions in more detail
 
-The formal definition of regions above in terms of reachability and aliasing
-works well in the abstract but can be hard to apply in practice. Instead, we
-suggest that instead users rely on the following rule of thumb: given a
-"generalized" function `y = f(x0, ..., xn)`:
+The formal definition of an isolation region phrased in terms of reachability
+and aliasing works well in the abstract but can be hard to apply in
+practice. Instead, we suggest that users rely on the following rule of thumb:
+given a "generalized" function `y = f(x0, ..., xn)`:
 
 1. All non-Sendable `xi` are in the same region after `f` executes.
 2. If any of `xi` are non-`Sendable` then, `y` is in the same region as the
@@ -211,22 +224,23 @@ suggest that instead users rely on the following rule of thumb: given a
 
 The reason why this rule makes sense is that conservatively without any further
 information we must assume that any of the `xi` inside of `f` could become
-reachable or alias each other and without further information `y` could be one
-of the `xi` or alias contents of the `xi`.
+reachable or alias each other within `f` and without further information `y`
+could be one of the `xi` or alias contents of the `xi`. Of course using type
+information, we can make this less conservative, but as a general rule, this
+guides us. Now lets apply this rule to specific examples to see it in action:
 
-Of course using type information, we can make this less conservative, but as a
-general rule, this guides us. Now lets apply this rule to specific examples to
-see it in action:
+* ``let y = x`` and ``var y = x``. Initializing a let or var binding `y` with
+  `x` results in `y` being in the same region as `x`. This again follows from
+  `(2)` since formally a copy is equivalent to calling a property on `x` that
+  takes `x` as self and returns a copy of `x`.
+
+* ``y = x``. Assigning a var binding `y` with `x` results in `y` being in the
+  same region as `x`.
 
 * ``let y = x.f``. Accessing a field `f` on a non-sendable value `x` results in
   a value `y` that must be in the same region as `x`. This follows from `(2)`
   since formally a property access is equivalent to calling a getter passing `x`
   as `self`.
-
-* ``let y = x``. Copying `x` into a new value `y` results in `y` being in the
-  same region as `x`. This again follows from `(2)` since formally a copy is
-  equivalent to calling a property on `x` that takes `x` as self and returns a
-  copy of `x`.
 
 * ``y.f = x``. Assigning `x` into a field `y.f` results in `y.f` being in the
   same region as `x`. This again follows from `(2)`.
@@ -239,10 +253,76 @@ see it in action:
 * TODO: Add vars
 * TODO: Switches
 
-Talk about control flow here.
-
 Thus using our simple two rules above, we can derive the necessary rules for
 conservative reachable value sets.
+
+Since the `isolation region` that a value belongs to varies as a function
+executes, it is possible to write code where two predecessors of a control flow
+join point of a value have the value in differing regions. For example if we
+wanted to conditionally withdraw money from a client's bank account if the bank
+account was not frozen and there were funds available we could write:
+
+```
+class AuditLog { ... }
+actor Auditor {
+  static var auditor: Auditor { ... }
+  func append(_ log: AuditLog) { ... }
+}
+
+extension BankAccount {
+  var successfulWithdrawalAuditLog: AuditLog { ... }
+  var failedWithdrawalAuditLogDueToFrozen: AuditLog { ... }
+
+  mutating func withdrawMoney(_ amountToWithdraw: Double) async -> Bool {
+    if amount < amountToWithdraw {
+      return false
+    }
+    amount -= amountToWithdraw
+    return true
+  }
+}
+
+extension ClientAccount {
+  func withdrawMoneyIfFundsAvailable(amount: Double) async {
+    for i in 0..<self.accounts.count {
+      var a = self.accounts[i]
+      var auditLog: AuditLog? = nil
+      if a.isFrozen {
+        if await a.withdrawMoney(amount) {
+          logMessage = a.successfulWithdrawalAuditLog
+        }
+      } else {
+        logMessage = a.failedWithdrawalAuditLogDueToFrozen
+      }
+      if let auditLog = auditLog {
+        Auditor.auditor.append(auditLog)
+      }
+      self.accounts[i] = a
+    }
+  }
+}
+```
+
+In this case, the compiler emits the following warnings:
+
+```
+bank.swift:86:18: warning: passing argument of non-sendable type 'BankAccount' from actor-isolated context to nonisolated context at this call site could yield a race with accesses later in this function (2 access sites displayed)
+        if await a.withdrawMoney(amount) {
+                 ^
+bank.swift:87:22: note: access here could race
+          auditLog = a.successfulWithdrawalAuditLog
+                     ^
+bank.swift:95:24: note: access here could race
+      self.accounts[i] = a
+      ~~~~~~~~~~~~~~~~~^~~
+bank.swift:93:38: warning: passing argument of non-sendable type 'AuditLog' from actor-isolated context to actor-isolated context at this call site could yield a race with accesses later in this function (1 access site displayed)
+        await Auditor.auditor.append(auditLog)
+                                     ^~~~~~~~
+bank.swift:95:24: note: access here could race
+      self.accounts[i] = a
+      ~~~~~~~~~~~~~~~~~^~~
+```
+
 
 ### Function Arguments and Self
 
