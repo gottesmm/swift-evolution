@@ -34,12 +34,12 @@ actor ClientAccount {
   var client: Client
   var accounts: [BankAccount] = []
 
-  init(_ client: Client) { ... }
+  init(_ client: Client, _ initialBalance: Double) { ... }
 }
 
-func openNewAccount() -> ClientAccount {
+func openNewAccount(initialBalance: Double) -> ClientAccount {
   let c = Client()
-  let b = ClientAccount(c)
+  let b = ClientAccount(c, initialBalance)
   return b
 }
 ```
@@ -49,7 +49,7 @@ we get an error in `openNewAccount` when strict concurrency is enabled since
 
 ```swift
 bank.swift:16:26: warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
-  let b = ClientAccount(c)
+  let b = ClientAccount(c, initialBalance)
                         ^
 bank.swift:2:7: note: class 'Client' does not conform to the 'Sendable' protocol
 class Client {
@@ -57,83 +57,90 @@ class Client {
 ```
 
 This is overly conservative since there cannot be any races in this code since
-`c` does not have any further uses outside of `ClientAccount`'s isolation domain
-once `c` has been transferred to `client`. If the language rules allowed the
-compiler to consider the uses of `c`, this code could be proven as being race
-free since there are no further uses of `c`.
+`c` does not have any other local uses within `openNewAccount` and `c` was just
+constructed implying `c` cannot have any uses outside of `openNewAccount`. If
+the language rules allowed the compiler to consider the uses of `c`, the
+compiler could accept this code after proving that this code is race free.
 
 ## Proposed solution
 
-To allow for code like the above to be written, we propose the introduction of a
-new flow sensitive SIL-analysis that emits error diagnostics at use sites of
-non-`Sendable` values that previously were transferred to a different isolation
-domain.
+We propose the introduction of a new flow sensitive SIL-analysis that emits
+error diagnostics at use sites of non-`Sendable` values that previously were
+transferred to a different isolation domain. In order to properly handle
+aliasing values, we analyze equivalence classes of values called "regions"
+instead of individual values. Two values `x` and `y` are defined to be within
+the same `region` at a program point `p` if:
 
-Noting that an alias of a value being transferred to another isolation domain
-can result in races with the original value, the pass avoids reasoning about
-values directly and instead conservatively reasons about equivalence classes of
-values called "regions". At a specific program point `p`, two values `x` and `y`
-are defined to be within the same region if:
+1. `x` may alias `y` at `p`.
+2. `x` or a part of `x` might be referenceable from `y` via iterative access to `y`'s properties at `p`.
 
-1. `x` may alias `y`.
-2. `x` might be referenceable from `y` via iterative access to `y`'s properties.
-
-This definition ensures that if `x` and `y` are in a different region from each
-other at `p`, then code using `x` cannot affect the `y` directly. This is called
-the "isolation property" of regions.
-
-For example, if we wanted to implement a routine on `ClientAccount` that
-returned the individual bank accounts with the largest and smallest amount of
-money contained within them:
+This definition ensures that values that are in different regions must be
+isolated from one another; code using one cannot affect directly affect the
+other. For example, if we had two bank accounts one for John and the other for
+Joanna and wanted to withdraw $50 from John account and $100 from Joanna
+account:
 
 ```swift
+class Transaction { ... }
+
+let johnsTransaction = Transaction(withdrawing: 50.0)
+let joannasTransaction = Transaction(withdrawing: 100.0)
+
+let johnsAccount = ClientAccount.lookup("John Smith")
+let joannasAccount = ClientAccount.lookup("Joanna Schmidt")
+johnsAccount.checkingAccount.apply(johnsTransaction)        (1)
+joannasAccount.checkingAccount.apply(joannasTransaction)    (2)
+```
+
+since we just constructed `johnsTransaction` and `joannasTransaction` we know
+that they must be isolated from each other and thus be apart of different
+regions. This means that we do not need to worry about any races in between
+`joannasTransaction` and `johnsTransaction` since they are isolated from each
+other. Thus the use of `(2)` at 
+
+In contrast, if we wanted to implement an auditing routine on `ClientAccount`
+that audited 2 random bank accounts of a client:
+
+```swift
+class Client { }
 class BankAccount {
-  var amount: Double
+  var amount: Double = 0.0
+}
+
+actor ClientAccount {
+  var client: Client
+  var accounts: [BankAccount] = []
+  var account2: BankAccount? = nil
+
+  init(_ client: Client, _ initialBalance: Double) { fatalError() }
+}
+
+actor AccountAuditing {
+  func prepareAudit(_ x: BankAccount) { fatalError() }
+
+  static var auditor: AccountAuditing { fatalError() }
 }
 
 extension ClientAccount {
-  func getLargestAndSmallest() -> (BankAccount, BankAccount)  {
-     let max = self.accounts.max { $0.amount < $1.amount }
-     let min = self.accounts.min { $0.amount < $1.amount }       (1)
-     return (min, max)
+  func transferAccountForAuditing() async {
+    let firstRandomAccount = self.accounts.max { $0.amount < $1.amount }
+    let secondRandomAccount = self.accounts.min { $0.amount < $1.amount } (1)
+    let auditor = AccountAuditing.auditor
+    await auditor.prepareAudit(firstRandomAccount!)
+    await auditor.prepareAudit(secondRandomAccount!)
   }
 }
 ```
 
-then at (1), we would need to consider max and min to be part of the same region
-since we do not know if they alias.
+then at `(1)`, we would consider `firstRandomAccount` and `secondRandomAccount`
+to be part of the same region since we do not know if they alias and thus cannot
+prove they are isolated from one another. As such, attempting to transfer either
+across an isolation boundary would be flagged as a race by the analysis since we
+conservatively cannot prove it is safe. This shows an important property of
+regions, if any of the values in the region are transferred into another
+isolation domain, then the analysis must consider them all to have been
+transferred.
 
-Since we know that values that are in different regions are isolated 
-
-Given two variables `x` and `y` in an isolation domain `A` that are in separate
-regions, using the definition above we know that if we were to transfer `x` to a
-different isolation domain `B`
-
-then if `x`
-is transferred across from an isolation domain `A` to an isolation domain `B`,
-any uses of `y` after the transfer in `A` cannot cause a race with any use of
-`x` in `B` since no use of `x` could 
-
-
-
-This implies that if a value `v` within a region `r` is transferred across an
-isolation boundary, then conservatively all values within `r` must also be
-transferred. Since regions are conservatively constructed, we know that no other
-values visible at `p` could be transferred beyond the values in `r`.
-
-
-Importantly, all regions are complete: since they are constructed
-conservatively, we can conclude that if two values `x`, `y` are not within the
-same region at `p`, then `x` crossing an isolation boundary at `p` will not
-result in `y` also crossing the isolation boundary.
-
-If `x` crosses an isolation domain at `p`, then if `y` is within the same region
-as `x`, `y` must have moved to another isolation domain as well. This 
-
-If at `p`, `x` is transferred to a different isolation domain then `v2` and all
-other values in `r` must also be transferred into the other isolation domain as
-well. This allows us to conclude that if there is a use later of any value in
-`r` after `p` then we may have a potential race.
 
 
 // DETAILED DESIGN
