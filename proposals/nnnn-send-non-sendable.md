@@ -13,17 +13,17 @@
 Swift Concurrency assigns mutable values to specific "isolation domains"
 determined by actor and task boundaries. Code running in distinct "isolation
 domains" are allowed to execute concurrently. As a result, `SE-SENDABLE` forbids
-non-`Sendable` values from being passed over an "isolation boundary" in order to
-define away data races. In practice this turns out to be a very significant
-restriction. In this document, we propose loosening these rules by introducing a
-new SIL analysis that determines whether an arbitrary non-`Sendable` value can
-be safely be sent across "isolation boundary".
+non-`Sendable` values from being passed over any "isolation boundary" in order
+to define away data races. In practice this turns out to be a very significant
+semantic restriction. In this document, we propose loosening these rules by
+introducing a new SIL analysis that determines whether an arbitrary
+non-`Sendable` value can be safely be sent across "isolation boundary".
 
 ## Motivation
 
-`SE-SENDABLE` states that non-`Sendable` values cannot be sent across /any/
+`SE-SENDABLE` states that non-`Sendable` values cannot be sent across any
 "isolation boundary". Thus given the following code that opens a new
-ClientAccount for a Client at a bank:
+`ClientAccount` for a `Client` at a bank:
 
 ```swift
 // Not Sendable
@@ -38,53 +38,101 @@ actor ClientAccount {
 }
 
 func openNewAccount(initialBalance: Double) -> ClientAccount {
-  let c = Client()
-  let b = ClientAccount(c, initialBalance)
-  return b
+  let client = Client()
+  let bankAccount = ClientAccount(c, initialBalance)
+  return bankAccount
 }
 ```
 
 we get an error in `openNewAccount` when strict concurrency is enabled since
-`Client` is not sendable:
+`Client` is not sendable despite us having just constructed the value:
 
 ```swift
 bank.swift:16:26: warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
-  let b = ClientAccount(c, initialBalance)
-                        ^
+  let bankAccount = ClientAccount(client, initialBalance)
+                                  ^
 bank.swift:2:7: note: class 'Client' does not conform to the 'Sendable' protocol
 class Client {
       ^
 ```
 
 This is overly conservative since there cannot be any races in this code since
-`c` does not have any other local uses within `openNewAccount` and `c` was just
-constructed implying `c` cannot have any uses outside of `openNewAccount`. If
-the language rules allowed the compiler to consider the uses of `c`, the
+`client` does not have any other local uses within `openNewAccount` and `client` was just
+constructed implying `client` cannot have any uses outside of `openNewAccount`. If
+the language rules allowed the compiler to consider the uses of `client`, the
 compiler could accept this code after proving that this code is race free.
+
+The simple example above shows the extreme limitations on expressivity caused by
+not using a flow-sensitive use based approach as defined currently by Swift's
+concurrency model. This will impede the development of new libraries that
+pervasively use concurrency or the updating of old libraries to use concurrency
+by requiring pervasive auditing of non-`Sendable` types to determine
+`Sendability`. To understand the scale of the problem in Apple's public SDK
+alone there are ~100k classes each with their own set of APIs implying that
+multiples of ~100k APIs would need to be audited. By introducing this flow
+sensitive model, we can avoid that problem and provide a light intuitive model
+for the use of such non-`Sendable` types.
 
 ## Proposed solution
 
 We propose the introduction of a new flow sensitive SIL-analysis that emits
 error diagnostics at use sites of non-`Sendable` values that previously were
-transferred to a different isolation domain. In order to properly handle
-aliasing values, we analyze equivalence classes of values called "regions"
-instead of individual values. Two values `x` and `y` are defined to be within
-the same `region` at a program point `p` if:
+transferred to a different isolation domain. Of course, our motivating example
+does not run afoul of this rule. But if we were to modify `openNewAccount` to
+call a logging function on `client`:
+
+```swift
+func openNewAccount(initialBalance: Double) -> ClientAccount {
+  let client = Client()
+  let bankAccount = ClientAccount(client, initialBalance)
+  client.log()
+  return bankAccount
+}
+```
+
+we would get the following error:
+
+```
+bank.swift:15:25: error: passing argument of non-sendable type 'Client' from nonisolated context to actor-isolated context at this call site could yield a race with accesses later in this function
+  let bankAccount = ClientAccount(client, initialBalance)
+                        ^
+bank.swift:16:5: note: access here could race
+  client.log()
+  ~~~~~~^~~~~
+```
+
+This makes sense since by moving `client` from a nonisolated context into
+`bankAccount`'s isolation context and using `client` again in the non-isolated
+context, functions isolated to `bankAccount`'s isolation domain could race with
+`c.log()`.
+
+Even though it is unsafe to use `client` in `openBankAccount` after transferring
+`client` into `bankAccount`'s isolation domain, it would be safe to use a value
+later in the function that could be proven statically as not being accessible in
+`bankAccount`'s isolation domain as a result of transferring `client`. In order
+to reason about such values, instead of reasoning about values directly, we
+reason about equivalence classes of values called "isolation regions". Formally,
+two values `x` and `y` are defined to be within the same `isolation region` at a
+program point `p` if:
 
 1. `x` may alias `y` at `p`.
 2. `x` or a part of `x` might be referenceable from `y` via iterative access to `y`'s properties at `p`.
 
-This definition ensures that values that are in different regions must be
-isolated from one another; code using one cannot affect directly affect the
-other. For example, if we had two bank accounts one for John and the other for
-Joanna and wanted to withdraw $50 from John account and $100 from Joanna
-account:
+This definition ensures that values that are in different "isolation regions"
+must be isolated from one another; code using one cannot affect directly affect
+the other. For example, if we had two bank accounts one for John and the other
+for Joanna and wanted to execute a series of transactions on each account:
 
 ```swift
 class Transaction { ... }
 
-let johnsTransaction = Transaction(withdrawing: 50.0)
-let joannasTransaction = Transaction(withdrawing: 100.0)
+var johnsTransaction = Transaction()
+johnsTransaction.add(withdrawing: 50.0)
+johnsTransaction.add(depositing: 100.0)
+
+var joannasTransaction = Transaction()
+johnsTransaction.add(depositing: 150.0)
+johnsTransaction.add(withdrawing: 50.0)
 
 let johnsAccount = ClientAccount.lookup("John Smith")
 let joannasAccount = ClientAccount.lookup("Joanna Schmidt")
@@ -96,7 +144,8 @@ since we just constructed `johnsTransaction` and `joannasTransaction` we know
 that they must be isolated from each other and thus be apart of different
 regions. This means that we do not need to worry about any races in between
 `joannasTransaction` and `johnsTransaction` since they are isolated from each
-other. Thus the use of `(2)` at 
+other. Thus the use of joannasTransaction at `(2)` must be safe and the analysis
+must not emit an error.
 
 In contrast, if we wanted to implement an auditing routine on `ClientAccount`
 that audited 2 random bank accounts of a client:
@@ -139,7 +188,72 @@ across an isolation boundary would be flagged as a race by the analysis since we
 conservatively cannot prove it is safe. This shows an important property of
 regions, if any of the values in the region are transferred into another
 isolation domain, then the analysis must consider them all to have been
-transferred.
+transferred allowing for our use-after-transfer analysis to be.
+
+By analyzing isolated regions of values, this SIL analysis will ease the
+development of libraries that pervasively use swift concurrency without
+requiring all types transferred in between isolation domains to be audited for
+Sendability.
+
+## Detailed Design
+
+### Regions in more detail
+
+The formal definition of regions above in terms of reachability and aliasing
+works well in the abstract but can be hard to apply in practice. Instead, we
+suggest that instead users rely on the following rule of thumb: given a
+"generalized" function `y = f(x0, ..., xn)`:
+
+1. All non-Sendable `xi` are in the same region after `f` executes.
+2. If any of `xi` are non-`Sendable` then, `y` is in the same region as the
+   `xi`. If all `xi` are `Sendable`, then `y` is within a region that consists only
+   of `y`.
+
+The reason why this rule makes sense is that conservatively without any further
+information we must assume that any of the `xi` inside of `f` could become
+reachable or alias each other and without further information `y` could be one
+of the `xi` or alias contents of the `xi`.
+
+Of course using type information, we can make this less conservative, but as a
+general rule, this guides us. Now lets apply this rule to specific examples to
+see it in action:
+
+* ``let y = x.f``. Accessing a field `f` on a non-sendable value `x` results in
+  a value `y` that must be in the same region as `x`. This follows from `(2)`
+  since formally a property access is equivalent to calling a getter passing `x`
+  as `self`.
+
+* ``let y = x``. Copying `x` into a new value `y` results in `y` being in the
+  same region as `x`. This again follows from `(2)` since formally a copy is
+  equivalent to calling a property on `x` that takes `x` as self and returns a
+  copy of `x`.
+
+* ``y.f = x``. Assigning `x` into a field `y.f` results in `y.f` being in the
+  same region as `x`. This again follows from `(2)`.
+
+* ``closure = { useX(x); useY(y) }``. Capturing non-sendable values `x` and `y`
+  results in `x` and `y` being in the same region. This can be viewed as a
+  consequence of `(2)` since `x` and `y` are formally arguments to the closure
+  formation. This also means that the closure must be part of the same region.
+
+* TODO: Add vars
+* TODO: Switches
+
+Talk about control flow here.
+
+Thus using our simple two rules above, we can derive the necessary rules for
+conservative reachable value sets.
+
+### Function Arguments and Self
+
+By our intuitive function isolation rule above, we know that all arguments to a
+function within the function body must be initialized to be within the same
+region. This naturally implies that all function arguments cannot be transferred
+
+Every isolation domain in Swift contains a set of "isolation regions" that
+correspond
+
+### Global Actors
 
 
 
