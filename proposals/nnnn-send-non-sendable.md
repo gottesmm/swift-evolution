@@ -59,7 +59,7 @@ we get an error in `openNewAccount` when strict concurrency is enabled since
 `Client` is not sendable despite us having just constructed the value:
 
 ```swift
-bank.swift:16:26: warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
+Warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
   let bankAccount = ClientAccount(client, initialBalance)
                                   ^
 bank.swift:2:7: note: class 'Client' does not conform to the 'Sendable' protocol
@@ -90,41 +90,26 @@ We propose the introduction of a new flow sensitive SIL-analysis that emits
 error diagnostics at use sites of non-`Sendable` values that previously were
 transferred to a different isolation domain. Of course, our motivating example
 does not run afoul of this rule. But if we were to modify `openNewAccount` to
-call a logging function on `client`:
+call a logging function on `client`, we would violate our rule since we would be
+reusing a value that had already been transferred from a non-isolated context to
+an actor-isolated context:
 
 ```swift
 func openNewAccount(initialBalance: Double) -> ClientAccount {
   let client = Client()
   let bankAccount = ClientAccount(client, initialBalance)
-  client.log()
+  client.log() // ERROR!
   return bankAccount
 }
 ```
 
-we would get the following error:
-
-```
-bank.swift:15:25: error: passing argument of non-sendable type 'Client' from nonisolated context to actor-isolated context at this call site could yield a race with accesses later in this function
-  let bankAccount = ClientAccount(client, initialBalance)
-                        ^
-bank.swift:16:5: note: access here could race
-  client.log()
-  ~~~~~~^~~~~
-```
-
-This makes sense since by moving `client` from a nonisolated context into
-`bankAccount`'s isolation context and using `client` again in the non-isolated
-context, functions isolated to `bankAccount`'s isolation domain could race with
-`c.log()`.
-
 Even though it is unsafe to use `client` in `openBankAccount` after transferring
-`client` into `bankAccount`'s isolation domain, it would be safe to use a value
-later in the function that could be proven statically as not being accessible in
-`bankAccount`'s isolation domain as a result of transferring `client`. In order
-to reason about such values, instead of reasoning about values directly, we
-reason about equivalence classes of values called "isolation regions". Formally,
-two values `x` and `y` are defined to be within the same `isolation region` at a
-program point `p` if:
+`client` into `bankAccount`'s isolation domain, we would be safe in using any
+other value that could statically be proven as not being accessible by applying
+any piece of code to `client`. In order to reason about such values, instead of
+reasoning about values directly, we reason about equivalence classes of values
+called "isolation regions". Formally, two values `x` and `y` are defined to be
+within the same `isolation region` at a program point `p` if:
 
 1. `x` may alias `y` at `p`.
 2. `x` or a part of `x` might be referenceable from `y` via iterative access to `y`'s properties at `p`.
@@ -250,7 +235,6 @@ guides us. Now lets apply this rule to specific examples to see it in action:
   consequence of `(2)` since `x` and `y` are formally arguments to the closure
   formation. This also means that the closure must be part of the same region.
 
-* TODO: Add vars
 * TODO: Switches
 
 Thus using our simple two rules above, we can derive the necessary rules for
@@ -260,9 +244,10 @@ Since the `isolation region` that a value belongs to varies as a function
 executes, it is possible to write code where two predecessors of a control flow
 join point of a value have the value in differing regions. For example if we
 wanted to conditionally withdraw money from a client's bank account if the bank
-account was not frozen and there were funds available we could write:
+account was not frozen and there were funds available we could write a routine
+that chose whether or not 
 
-```
+```swift
 class AuditLog { ... }
 actor Auditor {
   static var auditor: Auditor { ... }
@@ -289,10 +274,10 @@ extension ClientAccount {
       var auditLog: AuditLog? = nil
       if a.isFrozen {
         if await a.withdrawMoney(amount) {
-          logMessage = a.successfulWithdrawalAuditLog
+          auditLog = a.successfulWithdrawalAuditLog
         }
       } else {
-        logMessage = a.failedWithdrawalAuditLogDueToFrozen
+        auditLog = a.failedWithdrawalAuditLogDueToFrozen
       }
       if let auditLog = auditLog {
         Auditor.auditor.append(auditLog)
