@@ -29,16 +29,11 @@ non-`Sendable` value can be safely be sent across "isolation boundary".
 /// Not Sendable
 class Client { ... }
 
-/// Contains state that makes it non-Sendable
 struct BankAccount {
    /// The amount of funds available in this bank account.
    var amount: Double
 
-   /// Set to true if this account is frozen and money cannot be removed
-   /// from the account.
-   var isFrozen: Bool
-
-   /// ... Additional non-Sendable state ///
+   /* ... */
 }
 
 actor ClientAccount {
@@ -60,9 +55,9 @@ we get an error in `openNewAccount` when strict concurrency is enabled since
 overly conservative since there cannot be any races in this code since `client`
 does not have any other local uses within `openNewAccount` and `client` was just
 constructed implying `client` cannot have any uses outside of
-`openNewAccount`. If the language rules allowed the compiler to consider the
-uses of `client`, the compiler could accept this code after proving that this
-code is race free.
+`openNewAccount`. If the language rules allowed the compiler to analyze the uses
+of `client`, the compiler could accept this code after proving that this code is
+race free.
 
 The simple example above shows the extreme limitations on expressivity caused by
 not using a flow-sensitive use based approach as defined currently by Swift's
