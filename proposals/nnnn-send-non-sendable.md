@@ -26,9 +26,6 @@ non-`Sendable` value can be safely be sent across "isolation boundary".
 `ClientAccount` for a `Client` at a bank:
 
 ```swift
-/// Not Sendable
-class Client { ... }
-
 struct BankAccount {
    /// The amount of funds available in this bank account.
    var amount: Double
@@ -36,17 +33,30 @@ struct BankAccount {
    /* ... */
 }
 
-actor ClientAccount {
-  var client: Client
-  var accounts: [BankAccount] = []
+// Not Sendable
+class Client {
+    var name: String
+    var account: BankAccount
 
-  init(_ client: Client, _ initialBalance: Double) { ... }
+    init(name: String, initialBalance: Double) {
+        self.name = name
+        self.account = BankAccount(amount: initialBalance)
+    }
 }
 
-func openNewAccount(initialBalance: Double) -> ClientAccount {
-  let client = Client()
-  let bankAccount = ClientAccount(c, initialBalance) // Error! 'Client' is non-sendable! This could race!
-  return bankAccount
+actor ClientStore {
+    var clients: [Client] = []
+
+    static let clientStore = ClientStore()
+
+    func addClient(_ c: Client) {
+        clients.append(c)
+    }
+}
+
+func openNewAccount(name: String, initialBalance: Double) async {
+    let client = Client(name: name, initialBalance: initialBalance)
+    await ClientStore.clientStore.addClient(client) // Error! 'Client' is non-sendable! This could race!
 }
 ```
 
@@ -82,11 +92,10 @@ rule since we would be reusing a value that had already been transferred from a
 non-isolated context to an actor-isolated context:
 
 ```swift
-func openNewAccount(initialBalance: Double) -> ClientAccount {
-  let client = Client()
-  let bankAccount = ClientAccount(client, initialBalance)
-  client.log() // Error! Already passed out of isolation domain... this could race!
-  return bankAccount
+func openNewAccount(name: String, initialBalance: Double) async {
+    let client = Client(name: name, initialBalance: initialBalance)
+    await ClientStore.clientStore.addClient(client)
+    client.log() // Error! Already passed out of isolation domain... this could race!
 }
 ```
 
@@ -106,7 +115,11 @@ example, if we had two bank accounts one for John and the other for Joanna and
 wanted to execute a series of transactions on each account:
 
 ```swift
-class Transaction { ... }
+// Non sendable
+struct Transaction { ... }
+extension ClientAccount {
+    static func lookup(name: String) -> Client { ... }
+}
 
 var johnsTransaction = Transaction()
 johnsTransaction.add(withdrawing: 50.0)
@@ -180,7 +193,7 @@ Sendability.
 
 The formal definition of an isolation region phrased in terms of reachability
 and aliasing works well in the abstract but can be hard to apply in
-practice. Instead, we suggest that users rely on the following rule of thumb:
+practice. Instead, we suggest that users rely on the following rules of thumb:
 given a "generalized" function `y = f(x0, ..., xn)`:
 
 1. All non-Sendable `xi`'s regions are merged into one larger region after `f` executes.
