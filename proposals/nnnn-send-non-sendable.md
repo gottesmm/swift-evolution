@@ -62,40 +62,40 @@ race free.
 The simple example above shows the extreme limitations on expressivity caused by
 not using a flow-sensitive use based approach as defined currently by Swift's
 concurrency model. This will impede the development of new libraries that
-pervasively use concurrency or the updating of old libraries to use concurrency
-by requiring pervasive auditing of non-`Sendable` types to determine
+pervasively use concurrency as well as the updating of old libraries to use
+concurrency by requiring pervasive auditing of non-`Sendable` types to determine
 `Sendability`. To understand the scale of the problem in Apple's public SDK
 alone there are ~200k classes each with their own set of APIs implying that
-multiples of ~200k APIs would need to be audited. By introducing this flow
-sensitive model, we can avoid that problem and provide a light intuitive model
-for the use of such non-`Sendable` types.
+multiples of ~200k APIs would need to be audited for Sendability. By introducing
+this flow sensitive model, we can avoid that problem and provide a light
+intuitive model for the use of such non-`Sendable` types.
 
 ## Proposed solution
 
 We propose the introduction of a new flow sensitive SIL-analysis that emits
 error diagnostics at use sites of non-`Sendable` values that previously were
 transferred to a different isolation domain. Of course, our motivating example
-does not run afoul of this rule. But if we were to modify `openNewAccount` to
-call a logging function on `client`, we would violate our rule since we would be
-reusing a value that had already been transferred from a non-isolated context to
-an actor-isolated context:
+does not run afoul of this rule since `client` does not have any further uses
+beyond being passed into a constructor. But if we were to modify
+`openNewAccount` to call a logging function on `client`, we would violate our
+rule since we would be reusing a value that had already been transferred from a
+non-isolated context to an actor-isolated context:
 
 ```swift
 func openNewAccount(initialBalance: Double) -> ClientAccount {
   let client = Client()
   let bankAccount = ClientAccount(client, initialBalance)
-  client.log() // ERROR!
+  client.log() // Error! Already passed out of isolation domain... this could race!
   return bankAccount
 }
 ```
 
 Even though it is unsafe to use `client` in `openBankAccount` after transferring
 `client` into `bankAccount`'s isolation domain, we would be safe in using any
-other value that could statically be proven as not being accessible by applying
-any piece of code to `client`. In order to reason about such values, instead of
-reasoning about values directly, we reason about equivalence classes of values
-called "isolation regions". Formally, two values `x` and `y` are defined to be
-within the same `isolation region` at a program point `p` if:
+other value that could statically be proven as being isolated from `client`. To
+prove isolation here, we reason about equivalence classes of values called
+"isolation regions". Formally, two values `x` and `y` are defined to be within
+the same `isolation region` at a program point `p` if:
 
 1. `x` may alias `y` at `p`.
 2. `x` or a part of `x` might be referenceable from `y` via iterative access to `y`'s properties at `p`.
@@ -118,15 +118,15 @@ johnsTransaction.add(withdrawing: 50.0)
 
 let johnsAccount = ClientAccount.lookup("John Smith")
 let joannasAccount = ClientAccount.lookup("Joanna Schmidt")
-johnsAccount.checkingAccount.apply(johnsTransaction)        (1)
-joannasAccount.checkingAccount.apply(joannasTransaction)    (2)
+johnsAccount.checkingAccount.apply(johnsTransaction)
+joannasAccount.checkingAccount.apply(joannasTransaction)    (1)
 ```
 
 since we just constructed `johnsTransaction` and `joannasTransaction` we know
 that they must be isolated from each other and thus be apart of different
 regions. This means that we do not need to worry about any races in between
 `joannasTransaction` and `johnsTransaction` since they are isolated from each
-other. Thus the use of `joannasTransaction` at `(2)` must be safe and the
+other. Thus the use of `joannasTransaction` at `(1)` must be safe and the
 analysis must not emit an error.
 
 In contrast, if we wanted to implement an auditing routine on `ClientAccount`
