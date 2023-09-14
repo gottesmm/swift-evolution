@@ -115,9 +115,9 @@ within the same `isolation region` at a program point `p` if:
 2. `x` or a part of `x` might be referenceable from `y` via iterative access to `y`'s properties at `p`.
 
 This definition ensures that values that are in different "isolation regions"
-must be isolated from one another; code using one cannot affect directly affect
-the other. For example, if we had two bank accounts one for John and the other
-for Joanna and wanted to execute a series of transactions on each account:
+can be used concurrently since any code that uses `x` could not affect `y`. For
+example, if we had two bank accounts one for John and the other for Joanna and
+wanted to execute a series of transactions on each account:
 
 ```swift
 class Transaction { ... }
@@ -140,8 +140,8 @@ since we just constructed `johnsTransaction` and `joannasTransaction` we know
 that they must be isolated from each other and thus be apart of different
 regions. This means that we do not need to worry about any races in between
 `joannasTransaction` and `johnsTransaction` since they are isolated from each
-other. Thus the use of joannasTransaction at `(2)` must be safe and the analysis
-must not emit an error.
+other. Thus the use of `joannasTransaction` at `(2)` must be safe and the
+analysis must not emit an error.
 
 In contrast, if we wanted to implement an auditing routine on `ClientAccount`
 that audited two random bank accounts of a client:
@@ -155,26 +155,22 @@ class BankAccount {
 actor ClientAccount {
   var client: Client
   var accounts: [BankAccount] = [BankAccount()]
-
-  /// Zeroth bank account is always the checking account.
-  var checkingAccount: BankAccount { accounts[0] }
-
+  var randomAccount: BankAccount { ... }
   init(_ client: Client, _ initialBalance: Double) { ... }
 }
 
 actor AccountAuditing {
   func prepareAudit(_ x: BankAccount) { ... }
-
   static var auditor: AccountAuditing
 }
 
 extension ClientAccount {
   func transferAccountForAuditing() async {
-    let firstRandomAccount = self.accounts.max { $0.amount < $1.amount }
-    let secondRandomAccount = self.accounts.min { $0.amount < $1.amount } (1)
+    let firstRandomAccount = self.accounts.randomAccount
+    let secondRandomAccount = self.accounts.randomAccount
     let auditor = AccountAuditing.auditor
-    await auditor.prepareAudit(firstRandomAccount!)
-    await auditor.prepareAudit(secondRandomAccount!)
+    await auditor.prepareAudit(firstRandomAccount)
+    await auditor.prepareAudit(secondRandomAccount)
   }
 }
 ```
@@ -184,9 +180,8 @@ to be part of the same region since we do not know if they alias and thus cannot
 prove they are isolated from one another. As such, attempting to transfer either
 across an isolation boundary would be flagged as a race by the analysis since we
 conservatively cannot prove it is safe. This shows an important property of
-regions, if any of the values in the region are transferred into another
-isolation domain, then the analysis must consider them all to have been
-transferred allowing for our use-after-transfer analysis to be.
+"isolation regions", if any of the values in the region are transferred across
+an isolation boundary then all of the values are considered to be transferred.
 
 By analyzing isolated regions of values, this SIL analysis will ease the
 development of libraries that pervasively use swift concurrency without
@@ -202,25 +197,38 @@ and aliasing works well in the abstract but can be hard to apply in
 practice. Instead, we suggest that users rely on the following rule of thumb:
 given a "generalized" function `y = f(x0, ..., xn)`:
 
-1. All non-Sendable `xi` are in the same region after `f` executes.
-2. If any of `xi` are non-`Sendable` then, `y` is in the same region as the
-   `xi`. If all `xi` are `Sendable`, then `y` is within a region that consists only
+1. All non-Sendable `xi`'s regions are merged into one larger region after `f` executes.
+2. If any of `xi` are non-`Sendable` then, `y` is in the same merged region as the
+   `xi`. If all `xi` are `Sendable`, then `y` is within a new region that consists only
    of `y`.
+3. If `y` is mutable and:
+   a. Is not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called an "assign".
+   b. Is captured by reference previously in the current function, then we merge
+   the region associated with `y`'s previous value with the resulting region of
+   `(2)`.
 
-The reason why this rule makes sense is that conservatively without any further
-information we must assume that any of the `xi` inside of `f` could become
-reachable or alias each other within `f` and without further information `y`
-could be one of the `xi` or alias contents of the `xi`. Of course using type
-information, we can make this less conservative, but as a general rule, this
-guides us. Now lets apply this rule to specific examples to see it in action:
+These rules from the following conservative analysis: without any further
+information:
 
-* ``let y = x`` and ``var y = x``. Initializing a let or var binding `y` with
-  `x` results in `y` being in the same region as `x`. This again follows from
-  `(2)` since formally a copy is equivalent to calling a property on `x` that
-  takes `x` as self and returns a copy of `x`.
+a. Any of the `xi` inside of `f` could become reachable from each other.
+
+b. `y` could be one of the `xi` or alias contents of the `xi`.
+
+c. If `y` previously was captured by reference then the new value stored into
+`y` could be referenced via calling the closure.
+
+Of course using type information, we can make this less conservative, but as a
+general set of rules, these guide us. Now lets apply these rules to specific
+examples to see it in action:
+
+* ``let y = x, var y = x``. Initializing a let or var binding `y` with `x`
+  results in `y` being in the same region as `x`. This again follows from `(2)`
+  since formally a copy is equivalent to calling a property on `x` that takes
+  `x` as self and returns a copy of `x`.
 
 * ``y = x``. Assigning a var binding `y` with `x` results in `y` being in the
-  same region as `x`.
+  same region as `x`. If `y` is captured by a closure, then `y`'s previous
+  assigned region is merged with `x`'s region.
 
 * ``let y = x.f``. Accessing a field `f` on a non-sendable value `x` results in
   a value `y` that must be in the same region as `x`. This follows from `(2)`
@@ -235,10 +243,36 @@ guides us. Now lets apply this rule to specific examples to see it in action:
   consequence of `(2)` since `x` and `y` are formally arguments to the closure
   formation. This also means that the closure must be part of the same region.
 
+* ``closure = { useXInOut(&x) }``. Capturing a reference to a non-sendable value
+  `x` results in closure being placed into `x`'s region and any further
+  assignments to `x` being region merges instead of region assigns.
+
 * TODO: Switches
 
-Thus using our simple two rules above, we can derive the necessary rules for
+Thus using our simple set of rules above, we can derive the necessary rules for
 conservative reachable value sets.
+
+### Function Argument Regions and Self
+
+A callee has very limited information about the arguments passed to it by a
+caller a function. For instance, a callee cannot know the passed in value to an
+argument or if any of the arguments are classes that alias. Due to this lack of
+information, we conservatively must require that all function arguments are
+treated as belonging to the same global escaping region.
+
+Since any value within this global escaping region are non-local, we must assume
+that they could be used at any time and may even have already been transferred to ano
+
+Any values within this global escaping region cannot be transferred in between
+"isolation boundaries" since 
+
+Each function argument from a caller's perspective are treated is treated
+as being part of the same region. Additionally, they cannot be transferred since
+our the function argument is accessible within our caller and our caller relies
+upon us to not transfer the value if we were going to transfer it. This implies
+that in this model one can only transfer objects that are defined locally in the
+given function. With time, we may be able to reduce this restriction by
+introducing the.
 
 Since the `isolation region` that a value belongs to varies as a function
 executes, it is possible to write code where two predecessors of a control flow
@@ -308,12 +342,14 @@ bank.swift:95:24: note: access here could race
       ~~~~~~~~~~~~~~~~~^~~
 ```
 
-
-### Function Arguments and Self
-
 By our intuitive function isolation rule above, we know that all arguments to a
 function within the function body must be initialized to be within the same
-region. This naturally implies that all function arguments cannot be transferred
+region. This applies naturally since without further information, we must assume
+that there could be some relation in between them. We could be more aggressive
+about this by attempting to use the type system to prove that.
+
+This naturally implies that function arguments in a callee cannot be transferred
+across a thread boundary since the value may have another use in its caller.
 
 Every isolation domain in Swift contains a set of "isolation regions" that
 correspond
