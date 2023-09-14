@@ -103,7 +103,7 @@ Even though it is unsafe to use `client` in `openBankAccount` after transferring
 `client` into `bankAccount`'s isolation domain, we would be safe in using any
 other value that could statically be proven as being isolated from `client`. To
 prove isolation here, we reason about equivalence classes of values called
-"isolation regions". Formally, two values `x` and `y` are defined to be within
+`isolation regions`. Formally, two values `x` and `y` are defined to be within
 the same `isolation region` at a program point `p` if:
 
 1. `x` may alias `y` at `p`.
@@ -201,8 +201,8 @@ given a "generalized" function `y = f(x0, ..., xn)`:
    `xi`. If all `xi` are `Sendable`, then `y` is within a new region that consists only
    of `y`.
 3. If `y` is mutable and:
-   1. Is not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called a "region assign".
-   2. Is captured by reference previously in the current function, then we merge
+   1. not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called a "region assign".
+   2. previously captured by reference in the current function, then we merge
    the region associated with `y`'s previous value with the resulting region of
    `(2)`. This is called a "region merge".
 
