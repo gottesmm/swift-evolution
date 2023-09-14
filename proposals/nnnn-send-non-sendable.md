@@ -210,9 +210,7 @@ These rules from the following conservative analysis: without any further
 information:
 
 a. Any of the `xi` inside of `f` could become reachable from each other.
-
 b. `y` could be one of the `xi` or alias contents of the `xi`.
-
 c. If `y` previously was captured by reference then the new value stored into
 `y` could be referenced via calling the closure.
 
