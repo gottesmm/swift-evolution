@@ -201,10 +201,10 @@ given a "generalized" function `y = f(x0, ..., xn)`:
    `xi`. If all `xi` are `Sendable`, then `y` is within a new region that consists only
    of `y`.
 3. If `y` is mutable and:
-   1. Is not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called an "assign".
+   1. Is not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called a "region assign".
    2. Is captured by reference previously in the current function, then we merge
    the region associated with `y`'s previous value with the resulting region of
-   `(2)`.
+   `(2)`. This is called a "region merge".
 
 These rules from the following conservative analysis: without any further
 information:
@@ -214,9 +214,9 @@ information:
 * If `y` previously was captured by reference then the new value stored into
 `y` could be referenced via calling the closure.
 
-Of course using type information, we can make this less conservative, but as a
-general set of rules, these guide us. Now lets apply these rules to specific
-examples to see it in action:
+By using type information, we can make this less conservative, but as a general
+set of rules, these guide us. Now lets apply these rules to specific examples to
+see it in action:
 
 * ``let y = x, var y = x``. Initializing a let or var binding `y` with `x`
   results in `y` being in the same region as `x`. This again follows from `(2)`
