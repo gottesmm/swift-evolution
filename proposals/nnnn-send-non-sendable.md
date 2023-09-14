@@ -209,9 +209,9 @@ given a "generalized" function `y = f(x0, ..., xn)`:
 These rules from the following conservative analysis: without any further
 information:
 
-a. Any of the `xi` inside of `f` could become reachable from each other.
-b. `y` could be one of the `xi` or alias contents of the `xi`.
-c. If `y` previously was captured by reference then the new value stored into
+* Any of the `xi` inside of `f` could become reachable from each other.
+* `y` could be one of the `xi` or alias contents of the `xi`.
+* If `y` previously was captured by reference then the new value stored into
 `y` could be referenced via calling the closure.
 
 Of course using type information, we can make this less conservative, but as a
