@@ -201,8 +201,8 @@ given a "generalized" function `y = f(x0, ..., xn)`:
    `xi`. If all `xi` are `Sendable`, then `y` is within a new region that consists only
    of `y`.
 3. If `y` is mutable and:
-   a. Is not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called an "assign".
-   b. Is captured by reference previously in the current function, then we merge
+   1. Is not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called an "assign".
+   2. Is captured by reference previously in the current function, then we merge
    the region associated with `y`'s previous value with the resulting region of
    `(2)`.
 
