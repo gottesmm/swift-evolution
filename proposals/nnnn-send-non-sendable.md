@@ -214,9 +214,9 @@ information:
 * If `y` previously was captured by reference then the new value stored into
 `y` could be referenced via calling the closure.
 
-By using type information, we can make this less conservative, but as a general
-set of rules, these guide us. Now lets apply these rules to specific examples to
-see it in action:
+By using additional type information, we can make this less conservative (see
+extensions), but as a general set of rules, these guide us. Now lets apply these
+rules to specific examples to see it in action:
 
 * ``let y = x, var y = x``. Initializing a let or var binding `y` with `x`
   results in `y` being in the same region as `x`. This again follows from `(2)`
@@ -225,7 +225,8 @@ see it in action:
 
 * ``y = x``. Assigning a var binding `y` with `x` results in `y` being in the
   same region as `x`. If `y` is captured by a closure, then `y`'s previous
-  assigned region is merged with `x`'s region.
+  assigned region is merged with `x`'s region from `(3)(ii)` otherwise due to
+  `(3)(i)`, `y`'s previous region is forgotten.
 
 * ``let y = x.f``. Accessing a field `f` on a non-sendable value `x` results in
   a value `y` that must be in the same region as `x`. This follows from `(2)`
@@ -249,13 +250,29 @@ see it in action:
 Thus using our simple set of rules above, we can derive the necessary rules for
 conservative reachable value sets.
 
+### Crossing Isolation Boundaries
+
+Given a 
+
 ### Function Argument Regions and Self
 
 A callee has very limited information about the arguments passed to it by a
-caller a function. For instance, a callee cannot know the passed in value to an
-argument or if any of the arguments are classes that alias. Due to this lack of
-information, we conservatively must require that all function arguments are
-treated as belonging to the same global escaping region.
+caller a function. For instance without further type analysis, a callee cannot
+know if any of the values are reachable from each other or if any of the
+arguments are classes that alias. Due to this lack of information, we
+conservatively must require that all function arguments be treated as belonging
+to the same global escaping region. Additionally since our function argument may
+have additional uses in our caller, we must assume that if we ever transfer the
+function argument that we may introduce races into our caller. Since self is
+also a function argument, this requirement also applies to self meaning that one
+cannot pass off fields from self across an isolation domain.
+
+Thus if we wanted to... INSERT EXAMPLE HERE.
+
+We are able to relax this restriction if we were to take advantage of 
+
+Since all values within this global escaping region are non-local to the
+function, we must assume that they have escaped and even
 
 Since any value within this global escaping region are non-local, we must assume
 that they could be used at any time and may even have already been transferred to ano
