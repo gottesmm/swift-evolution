@@ -50,28 +50,19 @@ actor ClientAccount {
 
 func openNewAccount(initialBalance: Double) -> ClientAccount {
   let client = Client()
-  let bankAccount = ClientAccount(c, initialBalance)
+  let bankAccount = ClientAccount(c, initialBalance) // Error! 'Client' is non-sendable! This could race!
   return bankAccount
 }
 ```
 
 we get an error in `openNewAccount` when strict concurrency is enabled since
-`Client` is not sendable despite us having just constructed the value:
-
-```swift
-Warning: passing argument of non-sendable type 'Client' into actor-isolated context may introduce data races
-  let bankAccount = ClientAccount(client, initialBalance)
-                                  ^
-bank.swift:2:7: note: class 'Client' does not conform to the 'Sendable' protocol
-class Client {
-      ^
-```
-
-This is overly conservative since there cannot be any races in this code since
-`client` does not have any other local uses within `openNewAccount` and `client` was just
-constructed implying `client` cannot have any uses outside of `openNewAccount`. If
-the language rules allowed the compiler to consider the uses of `client`, the
-compiler could accept this code after proving that this code is race free.
+`Client` is not sendable despite us having just constructed the value. This is
+overly conservative since there cannot be any races in this code since `client`
+does not have any other local uses within `openNewAccount` and `client` was just
+constructed implying `client` cannot have any uses outside of
+`openNewAccount`. If the language rules allowed the compiler to consider the
+uses of `client`, the compiler could accept this code after proving that this
+code is race free.
 
 The simple example above shows the extreme limitations on expressivity caused by
 not using a flow-sensitive use based approach as defined currently by Swift's
