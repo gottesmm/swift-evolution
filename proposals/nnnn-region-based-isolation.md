@@ -1,4 +1,4 @@
-# Send Non-Sendable
+# Region based Isolation
 
 * Proposal: [SE-NNNN](NNNN-filename.md)
 * Authors: [Michael Gottesman](https://github.com/gottesmm) [Joshua Turcotti](https://github.com/jturcotti)
@@ -17,7 +17,8 @@ non-`Sendable` values from being passed over any "isolation boundary" in order
 to define away data races. In practice this turns out to be a very significant
 semantic restriction. In this document, we propose loosening these rules by
 introducing a new SIL analysis that determines whether an arbitrary
-non-`Sendable` value can be safely be sent across "isolation boundary".
+non-`Sendable` value can be safely be sent across "isolation boundary" by
+introducing the flow sensitive concept of isolation regions.
 
 ## Motivation
 
