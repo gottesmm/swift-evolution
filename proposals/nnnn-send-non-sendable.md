@@ -199,7 +199,8 @@ given a "generalized" function `y = f(x0, ..., xn)`:
    `xi`. If all `xi` are `Sendable`, then `y` is within a new region that consists only
    of `y`.
 3. If `y` is mutable and:
-   1. not captured by reference then `y`'s previous region is not merged into `y`'s new region. This is called a "region assign".
+   1. not captured by reference then `y`'s previous region is not merged into `y`'s
+      new region. This is called a "region assign".
    2. previously captured by reference in the current function, then we merge
    the region associated with `y`'s previous value with the resulting region of
    `(2)`. This is called a "region merge".
@@ -219,7 +220,8 @@ rules to specific examples to see it in action:
 * ``let y = x, var y = x``. Initializing a let or var binding `y` with `x`
   results in `y` being in the same region as `x`. This again follows from `(2)`
   since formally a copy is equivalent to calling a property on `x` that takes
-  `x` as self and returns a copy of `x`.
+  `x` as self and returns a copy of `x`. Performing a `consume` of `x` would
+  analogously via `(2)` also result in `y` being in the same region as `x`.
 
 * ``y = x``. Assigning a var binding `y` with `x` results in `y` being in the
   same region as `x`. If `y` is not captured by a closure, then `y`'s previous
@@ -237,20 +239,106 @@ rules to specific examples to see it in action:
 * ``closure = { useX(x); useY(y) }``. Capturing non-sendable values `x` and `y`
   results in `x` and `y` being in the same region. This can be viewed as a
   consequence of `(2)` since `x` and `y` are formally arguments to the closure
-  formation. This also means that the closure must be part of the same region.
+  formation. This also means that the closure must be part of that same region.
 
 * ``closure = { useXInOut(&x) }``. Capturing a reference to a non-sendable value
   `x` results in closure being placed into `x`'s region and any further
   assignments to `x` being region merges instead of region assigns.
 
-* TODO: Switches
+The above rules show how isolation regions change at specific program points,
+but do not explain how isolation regions are affected by control flow. Given two
+values `x` and `y` in a control flow block, we say that `x` and `y` are in the
+same region in the control flow block if in any of the control flow block's
+predecessor blocks they are in the same region. For instance:
 
-Thus using our simple set of rules above, we can derive the necessary rules for
-conservative reachable value sets.
+```
+// x and y are in different regions
+var x: NonSendable? = NonSendable()
+var y: NonSendable? = NonSendable()
+if ... {
+  // x and y are now in the same region
+  x = y
+} else {
+  // x and y are still in different regions
+}
 
-### Crossing Isolation Boundaries
+// Since along the if statement x and y are in the same region,
+// they are in the same region here.
+```
 
-Given a 
+This is a safe rule to use since it is always safe to have an isolation region
+is conservatively big since this will just cause us to reject programs that we
+could have potentially accepted since we will treat values that could not affect
+each other as if they could.
+
+The above description of regions naturally allows the definition of an
+optimistic forward dataflow problem that allows us to determine at every point
+of the program the isolation region that a value belongs to. This dataflow is
+defined as follows:
+
+1. The state of the dataflow is a graph where each value is a node and each edge
+   represents a statement that causes two values to be apart of the same region.
+
+2. Merges are defined by unions of graphs meaning that if there is an edge in
+   between two nodes in any predecessor control flow blocks, there is an edge in
+   the successor control flow block.
+
+3. We consider the top of the dataflow to be the empty graph and the bottom of
+   our dataflow to be a completely connected graph.
+
+4. Since the dataflow is a forward optimistic dataflow, we initially just treat
+   graphs over backedges as being top.
+
+5. We know that our dataflow will converge since we never remove edges from any
+   graph implying that our graph operations are monotonic.
+
+### Transferring non-Sendable values across Isolation Boundaries
+
+Using our definition of regions, we can now consider how to safely pass
+non-Sendable values over isolation boundaries. Let `v` be a non-Sendable value
+and `transferToOtherDomain` an asynchronous function in a different isolation domain from
+`v`. Then we know that it is safe to pass `v` to `transferToOtherDomain` if `v` does not have any
+later uses in the caller function:
+
+```
+func caller() async {
+    let v: NonSendable = ...
+    await transferToOtherDomain(v) // Safe since there are no later uses.
+}
+```
+
+We say that the invocation of `transferToOtherDomain` transfers `v` out of `v`'s
+source isolation domain into `transferToOtherDomain`'s isolation domain. If we
+were to have a use of `v` or any value in `v`'s region at
+`transferToOtherDomain` after we transferred `v`, we could race with code inside
+`transferToOtherDomain`:
+
+```
+func caller() {
+    let v: NonSendable = ...
+    let w = v
+    await transferToOtherDomain(v)
+    w.doSomething() // Error! Could race with code in `transferToOtherDomain`.
+}
+```
+
+In contrast, if we have a value `a` that is in a separate isolation region from
+`v`, since any use of `a` cannot affect `v`, we know that the use of `a` cannot
+race with `v`:
+
+```
+func caller() {
+    let v: NonSendable = ...
+    let a: NonSendable = ...
+    await transferToOtherDomain(v)
+    a.doSomething() // No Error! Can't race!
+}
+```
+
+Importantly, we only need to consider the values in the isolation region for `v`
+at `transferToOtherDomain` since any operation that we perform later that would
+modify `v`'s region would necessarily cause us to emit an error since the
+operation would cause a race due to its runing after `v` was transferred.
 
 ### Function Argument Regions and Self
 
