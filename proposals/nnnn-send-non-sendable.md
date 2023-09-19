@@ -192,7 +192,8 @@ Sendability.
 The formal definition of an isolation region phrased in terms of reachability
 and aliasing works well in the abstract but can be hard to apply in
 practice. Instead, we suggest that users rely on the following rules of thumb:
-given a "generalized" function `y = f(x0, ..., xn)`:
+given a "generalized" function `y = f(x0, ..., xn)` that does not cross
+isolation boundaries:
 
 1. All non-Sendable `xi`'s regions are merged into one larger region after `f` executes.
 2. If any of `xi` are non-`Sendable` then, `y` is in the same merged region as the
@@ -245,6 +246,12 @@ rules to specific examples to see it in action:
   `x` results in closure being placed into `x`'s region and any further
   assignments to `x` being region merges instead of region assigns.
 
+* Given a function `func transfer(x: NonSendable, y: NonSendable) async`, in the
+  body of `transfer`, `x` and `y` are considered to be within the same
+  region. Since `self` is a function argument to methods, this implies that when
+  `self` is non-Sendable all method arguments must be in the same region as
+  `self`.
+
 The above rules show how isolation regions change at specific program points,
 but do not explain how isolation regions are affected by control flow. Given two
 values `x` and `y` in a control flow block, we say that `x` and `y` are in the
@@ -296,9 +303,10 @@ defined as follows:
 
 Using our definition of regions, we can now consider how to safely pass
 non-Sendable values over isolation boundaries. Let `v` be a non-Sendable value
-and `transferToOtherDomain` an asynchronous function in a different isolation domain from
-`v`. Then we know that it is safe to pass `v` to `transferToOtherDomain` if `v` does not have any
-later uses in the caller function:
+and `transferToOtherDomain` an asynchronous function in a different isolation
+domain from `v`. Then we know that it is safe to pass `v` to
+`transferToOtherDomain` if `v` does not have any later uses in the caller
+function:
 
 ```
 func caller() async {
@@ -335,12 +343,12 @@ func caller() {
 }
 ```
 
-Importantly, we only need to consider the values in the isolation region for `v`
-at `transferToOtherDomain` since any operation that we perform later that would
-modify `v`'s region would necessarily cause us to emit an error since the
-operation would cause a race due to its runing after `v` was transferred.
+Importantly, we only need to consider the isolation region for `v` at
+`transferToOtherDomain` since any operation that we perform after `v` is
+transferred that modified `v`'s region would necessarily cause an error to be
+emitted.
 
-### Function Argument Regions and Self
+
 
 A callee has very limited information about the arguments passed to it by a
 caller a function. For instance without further type analysis, a callee cannot
