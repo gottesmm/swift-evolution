@@ -129,10 +129,8 @@ var joannasTransaction = Transaction()
 johnsTransaction.add(depositing: 150.0)
 johnsTransaction.add(withdrawing: 50.0)
 
-let johnsAccount = ClientAccount.lookup("John Smith")
-let joannasAccount = ClientAccount.lookup("Joanna Schmidt")
-johnsAccount.checkingAccount.apply(johnsTransaction)
-joannasAccount.checkingAccount.apply(joannasTransaction)    (1)
+johnsAccount.account.apply(johnsTransaction)
+joannasAccount.account.apply(joannasTransaction)    (1)
 ```
 
 since we just constructed `johnsTransaction` and `joannasTransaction` we know
@@ -224,9 +222,9 @@ rules to specific examples to see it in action:
   `x` as self and returns a copy of `x`.
 
 * ``y = x``. Assigning a var binding `y` with `x` results in `y` being in the
-  same region as `x`. If `y` is captured by a closure, then `y`'s previous
-  assigned region is merged with `x`'s region from `(3)(ii)` otherwise due to
-  `(3)(i)`, `y`'s previous region is forgotten.
+  same region as `x`. If `y` is not captured by a closure, then `y`'s previous
+  assigned region is forgotten due to `(3)(i)`. In contrast if `y` was captured
+  by a closure, then `y`'s former region is merged with the region of `x`.
 
 * ``let y = x.f``. Accessing a field `f` on a non-sendable value `x` results in
   a value `y` that must be in the same region as `x`. This follows from `(2)`
@@ -370,7 +368,9 @@ correspond
 
 ### Global Actors
 
+### Initializers
 
+### Deinitializers
 
 // DETAILED DESIGN
 
