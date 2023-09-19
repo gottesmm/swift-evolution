@@ -299,12 +299,12 @@ defined as follows:
 5. We know that our dataflow will converge since we never remove edges from any
    graph implying that our graph operations are monotonic.
 
-### Transferring non-Sendable values across Isolation Boundaries
+### Transferring Local non-Sendable values across Isolation Boundaries
 
-Using our definition of regions, we can now consider how to safely pass
-non-Sendable values over isolation boundaries. Let `v` be a non-Sendable value
-and `transferToOtherDomain` an asynchronous function in a different isolation
-domain from `v`. Then we know that it is safe to pass `v` to
+Using our definition of regions, we can now consider how to safely pass local
+non-Sendable values over isolation boundaries. Let `v` be a non-Sendable local
+value and `transferToOtherDomain` an asynchronous function in a different
+isolation domain from `v`. Then we know that it is safe to pass `v` to
 `transferToOtherDomain` if `v` does not have any later uses in the caller
 function:
 
@@ -322,7 +322,7 @@ were to have a use of `v` or any value in `v`'s region at
 `transferToOtherDomain`:
 
 ```
-func caller() {
+func caller() async {
     let v: NonSendable = ...
     let w = v
     await transferToOtherDomain(v)
@@ -335,7 +335,7 @@ In contrast, if we have a value `a` that is in a separate isolation region from
 race with `v`:
 
 ```
-func caller() {
+func caller() async {
     let v: NonSendable = ...
     let a: NonSendable = ...
     await transferToOtherDomain(v)
@@ -348,125 +348,34 @@ Importantly, we only need to consider the isolation region for `v` at
 transferred that modified `v`'s region would necessarily cause an error to be
 emitted.
 
+### Non-Sendable Function Arguments
 
-
-A callee has very limited information about the arguments passed to it by a
-caller a function. For instance without further type analysis, a callee cannot
-know if any of the values are reachable from each other or if any of the
-arguments are classes that alias. Due to this lack of information, we
-conservatively must require that all function arguments be treated as belonging
-to the same global escaping region. Additionally since our function argument may
-have additional uses in our caller, we must assume that if we ever transfer the
-function argument that we may introduce races into our caller. Since self is
-also a function argument, this requirement also applies to self meaning that one
-cannot pass off fields from self across an isolation domain.
-
-Thus if we wanted to... INSERT EXAMPLE HERE.
-
-We are able to relax this restriction if we were to take advantage of 
-
-Since all values within this global escaping region are non-local to the
-function, we must assume that they have escaped and even
-
-Since any value within this global escaping region are non-local, we must assume
-that they could be used at any time and may even have already been transferred to ano
-
-Any values within this global escaping region cannot be transferred in between
-"isolation boundaries" since 
-
-Each function argument from a caller's perspective are treated is treated
-as being part of the same region. Additionally, they cannot be transferred since
-our the function argument is accessible within our caller and our caller relies
-upon us to not transfer the value if we were going to transfer it. This implies
-that in this model one can only transfer objects that are defined locally in the
-given function. With time, we may be able to reduce this restriction by
-introducing the.
-
-Since the `isolation region` that a value belongs to varies as a function
-executes, it is possible to write code where two predecessors of a control flow
-join point of a value have the value in differing regions. For example if we
-wanted to conditionally withdraw money from a client's bank account if the bank
-account was not frozen and there were funds available we could write a routine
-that chose whether or not 
+In contrast to local values, function arguments cannot be transferred over an
+isolation boundary. This is because without additional information, we cannot
+know if the callers of an async callee are part of the callee's isolation
+domain. In the case where the caller and callee are within the same isolation
+domain, our rules allow for uses to occur in the caller after the callee occurs:
 
 ```swift
-class AuditLog { ... }
-actor Auditor {
-  static var auditor: Auditor { ... }
-  func append(_ log: AuditLog) { ... }
-}
+func callee(_ x: NonSendable) async { ... }
 
-extension BankAccount {
-  var successfulWithdrawalAuditLog: AuditLog { ... }
-  var failedWithdrawalAuditLogDueToFrozen: AuditLog { ... }
-
-  mutating func withdrawMoney(_ amountToWithdraw: Double) async -> Bool {
-    if amount < amountToWithdraw {
-      return false
-    }
-    amount -= amountToWithdraw
-    return true
-  }
-}
-
-extension ClientAccount {
-  func withdrawMoneyIfFundsAvailable(amount: Double) async {
-    for i in 0..<self.accounts.count {
-      var a = self.accounts[i]
-      var auditLog: AuditLog? = nil
-      if a.isFrozen {
-        if await a.withdrawMoney(amount) {
-          auditLog = a.successfulWithdrawalAuditLog
-        }
-      } else {
-        auditLog = a.failedWithdrawalAuditLogDueToFrozen
-      }
-      if let auditLog = auditLog {
-        Auditor.auditor.append(auditLog)
-      }
-      self.accounts[i] = a
-    }
-  }
+func caller() async {
+    let v: NonSendable = ...
+    await callee(v) // Same isolation domain.
+    v.performWork() // Thus we can perform work here.
 }
 ```
 
-In this case, the compiler emits the following warnings:
-
-```
-bank.swift:86:18: warning: passing argument of non-sendable type 'BankAccount' from actor-isolated context to nonisolated context at this call site could yield a race with accesses later in this function (2 access sites displayed)
-        if await a.withdrawMoney(amount) {
-                 ^
-bank.swift:87:22: note: access here could race
-          auditLog = a.successfulWithdrawalAuditLog
-                     ^
-bank.swift:95:24: note: access here could race
-      self.accounts[i] = a
-      ~~~~~~~~~~~~~~~~~^~~
-bank.swift:93:38: warning: passing argument of non-sendable type 'AuditLog' from actor-isolated context to actor-isolated context at this call site could yield a race with accesses later in this function (1 access site displayed)
-        await Auditor.auditor.append(auditLog)
-                                     ^~~~~~~~
-bank.swift:95:24: note: access here could race
-      self.accounts[i] = a
-      ~~~~~~~~~~~~~~~~~^~~
-```
-
-By our intuitive function isolation rule above, we know that all arguments to a
-function within the function body must be initialized to be within the same
-region. This applies naturally since without further information, we must assume
-that there could be some relation in between them. We could be more aggressive
-about this by attempting to use the type system to prove that.
-
-This naturally implies that function arguments in a callee cannot be transferred
-across a thread boundary since the value may have another use in its caller.
-
-Every isolation domain in Swift contains a set of "isolation regions" that
-correspond
-
-### Global Actors
+Thus if we were to allow for `callee` to transfer `v`, we would inadvertently be
+introducing a potential race into our caller by mistake. This limitation can be
+eliminated via an extension (see transferring arguments [make a link]).
 
 ### Initializers
 
 ### Deinitializers
+
+
+<!--
 
 // DETAILED DESIGN
 
@@ -1079,3 +988,4 @@ It is worth evaluating whether this language feature is actually something devel
 ## Acknowledgments
 
 This proposal is based on joint work with Mae Milano and Andrew Myers, published in the PLDI 2022 paper (A Flexible Type System for Fearless Concurrency)[https://www.cs.cornell.edu/andru/papers/gallifrey-types/]. Doug Gregor and Kavon Farvardin assisted with the development of the `SendNonSendable` implementation and this proposal as well.
+-->
