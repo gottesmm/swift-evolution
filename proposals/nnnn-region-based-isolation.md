@@ -242,15 +242,21 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    region after f executes:
    
    ```swift
-   // Rule 1. Passing region isolatable Arguments to async non-transferring functions merge their regions.
+   // Rule 1. Passing non-Sendable values to non-transferring functions merge their regions.
    func rule1() async {
      let x1 = NonSendable()
      let x2 = NonSendable()
-     // At this point x1, x2 are non-isolated but in different regions
+     // x1, x2 are non-isolated but in different regions
      // Regions: [x1, x2]
-     let _  = f(x1, x2)
-     // Now x1, x2 are in the same region and still non-isolated
+     let _  = await asyncFunction(x1, x2)
+     // x1, x2 are in the same region and still non-isolated
      // Regions: [(x1, x2)]
+
+     // The same follows if we create an x3 and call a synchronous function.
+     let x3 = NonSendable()
+     // Regions: [(x1, x2), x3]
+     let _ = synchronousFunction(x2, x3)
+     // Regions: [(x1, x2, x3)]
    }
    ```
 
@@ -276,11 +282,12 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
 
 3. If `y` is mutable binding (e.x.: `var`) and:
    1. is not captured in a closure and passed inout then `y`'s previous region is not merged into `y`'s
-      new region. This is called a "region assign".
+      new region when y is assigned a new value.
       
       ```swift
-      // Rule 3i. If a var is assigned a new value and was not captured by reference,
-      // then y takes on the region of its new value and the old region is forgotten.
+      // Rule 3i. If a var is assigned a new value and was not previously
+      // captured and passed inout then y takes on the region of its new value
+      // and the old region is forgotten.
       func rule3i() async {
         let x1 = NonSendable()
         let x2 = NonSendable()
@@ -301,11 +308,13 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
       }
       ```
       
-   2. previously captured by reference in the current function, then we merge
+   2. previously captured and passed inout in the current function, then we merge
       the region associated with `y`'s previous value with the resulting region of
-      `(2)`. This is called a "region merge".
+      the assignment.
       
       ```swift
+      // Rule 3ii. If a var is assigned a new value and was previously
+      // captured and passed inout then y's new region is merged with y's old region.
       func rule3ii() async {
         let x1 = NonSendable()
         let x2 = NonSendable()
@@ -331,7 +340,7 @@ any further type information:
 
 * Any of the `xi` inside of `f` could become reachable from each other.
 * `y` could be one of the `xi` or alias contents of the `xi`.
-* If `y` previously was captured by reference then the new value stored into
+* If `y` previously was captured and passed inout then the new value stored into
 `y` could be referenced via calling the closure since the inout will cause
 `y` to be left as a box reference.
 
