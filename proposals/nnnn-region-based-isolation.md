@@ -969,7 +969,7 @@ await y
 print(x) // Error! x was already transferred into the main actor!
 ```
 
-### Simplifying non-isolated initializers via transferring
+### Simplifying non-isolated initializers and deinitializers via transferring
 
 All of the above discussions involved actors in the context of an isolated self
 parameter. When we have a non-isolated self parameter, we need to behave
@@ -997,28 +997,42 @@ actor Actor {
 }
 ```
 
-We propose to loosen this requirement in situations where the compiler knows
-that the value has been fully caller and callee transferred into the nonisolated
-function and furthermore define designated initializers to transfer self. Since
-`self` in such a case will have been fully transfered by the caller in all
-cases, we know that `self` and its entire region cannot be accessed by any other
-part of the program. Since `transferring` provides a strong form of isolation
-for self, it now becomes safe to access stored properties of self once more
-until we escape self, breaking our strong isolation created by `transferring`:
+We propose to loosen this requirement for non-isolated designated initializers
+and deinitializers, situations where the compiler knows that the value has been
+fully caller and callee transferred into the nonisolated function. Since `self`
+in such cases will have been fully transfered by the caller in all cases, we
+know that `self` and its entire region cannot be accessed by any other part of
+the program. Since `transferring` provides a strong form of isolation for self,
+it now becomes safe to access stored properties of self once more until we
+escape self, breaking our strong isolation created by `transferring`:
 
 ```
 actor Actor {
-  var ns: NonSendable
+  var nonSendableField: NonSendableType
+  var mutableSendableField: SendableType
+  let immutableSendableField: SendableType
 
   init() {
     // Ok. We haven't escaped self yet.
-    let n = ns
+    let n = nonSendableField
 
     // We escaped self breaking our transfer property.
     escapeSelfIntoNonIsolated(self)
 
     // Error! Safety of transferring has been broken.
-    let _ = ns
+    let _ = nonSendableField
+  }
+
+  deinit {
+     _ = self.immutableSendableField // Ok
+     _ = self.mutableSendableField // Ok
+     _ = self.nonSendableField // Error! Must be sendable
+
+     escapeSelfIntoNonIsolated(self)
+
+     _ = self.immutableSendableField // Ok
+     _ = self.mutableSendableField // Error! Must be immutable
+     _ = self.nonSendableField // Error! Must be sendable
   }
 }
 ```
@@ -1027,7 +1041,30 @@ In the current proposal, this only will apply to designated initializers, via
 the usage of the `transferring` self, this property can be applied to general
 non-isolated methods. See extensions for more information.
 
-### Passing 
+// TODO: Why not just have deinit be isolated to actor and prevent
+// transferring. Then doesn't need to be non-isolated. 
+
+### Using transferring to pass non-Sendable values to async isolated actor initializers
+
+In [SE-0327](0327-actor-initializers.md), non-`Sendable` values were not allowed
+to be passed into async isolated actor initializers. Instead, it was required to
+pass in Sendable values and then within the initializer chain construct any
+non-`Sendable` values needed for the Actor's internal state:
+
+```swift
+INSERT EXAMPLE
+```
+
+Given our new rules of transferring, we are able to loosen this rule and state
+that non-`Sendable` values can be passed to async actor initializers since we
+will have transferred them into the actor's isolation domain implying that they
+cannot be used by any outside code:
+
+```swift
+INSERT EXAMPLE
+```
+
+// TODO: Expand this with GAIT specific rules.
 
 ## Source compatibility
 
