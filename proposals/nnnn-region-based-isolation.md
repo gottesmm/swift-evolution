@@ -432,10 +432,10 @@ dataflow in more detail in an [appendix](#isolation-region-dataflow) to this pro
 
 ### Transferring Values, Isolation Regions, and Isolation Domains.
 
-Now that we have defined isolation regions, we define the rest of our tersm. All
-non-`Sendable` values in a Swift program belong to an *isolation region*. An
-*isolation region* is either non-isolated or assigned to an *isolation domain*
-that uniquely owns the *isolation region*:
+As defined above, all non-`Sendable` values in a Swift program belong to some
+*isolation region*. An *isolation region* is either non-isolated or assigned to
+an *isolation domain* that uniquely owns the *isolation region* and which the
+*isolation region* is strongly tied to:
 
 ```swift
 actor Actor {
@@ -455,50 +455,53 @@ func nonisolatedFunction() async {
   // domain.
   let ns = NonSendable()
 }
+
+// globalVariable is in a region belonging to @GlobalActor's isolation domain.
+@GlobalActor var globalVariable: NonSendable
 ```
 
 As the program executes, the specific *isolation domain* that owns an *isolation
-region* can vary, but the *isolation region* can never belong to more than one
-*isolation domain* since races could result:
+region* can vary, but the *isolation region* can never execute in code that does
+not belong to its own *isolation domain* since races could result:
 
 ```swift
 @MainActor func transferToMain<T>(_ t: T) async { ... }
 
-@OtherActor func assigningIsolationDomainsToIsolationRegions() async {
+func assigningIsolationDomainsToIsolationRegions() async {
   // x is assigned to a new isolation region that is non-isolated and thus not assigned
   // to a specific isolation domain.
-  let x = NonSendable() // Regions: [x] (NonIsolated)
+  // Regions: [x]
+  let x = NonSendable()
 
   // Once y join's x's region, we expand the region, but the region is still
   // in not isolated to a specific isolation domain.
-  let y = x             // Regions: [(x, y)] (NonIsolated)
+  // Regions: [(x, y)]
+  let y = x
 
   // By passing x into transferToMain, we are exposing x's region into transferToMain.
-  // At this point, our 
   await transferToMain(x)
+  // Once transferToMain has executed, then x and y are in MainActor's region.
+  // Regions: [{(x, y), @MainActor}]
 
-  // By using `x` again here we are adding `x`'s region back into `@OtherActor`.
-  // Thus `x`'s region would belong to *two* different isolation domains causing
-  // a potential race.
-  print(x)
+  // Error! By using `y` here, we are accessing `y` from outside of `@MainActor`'s
+  // isolation domain meaning that we could race.
+  print(y)
 }
 ```
 
-Formally, when the *isolation domain* of an *isolation region* `R` is
-transferred from *isolation domain* `@D` to *isolation domain* `@E`, we say that
-`R` is *transferred* from `@D` to `@E`. If this transfer operation resulted from
-passing a non-`Sendable` value `v` into a function `f`, then we say that `v` is
+Formally, when we pass a non-`Sendable` value `v` into a function `f` that is of
+a different isolation domain from `v`, then we say that `v` and `v`'s region are
 *transferred* into `f`.
 
-More concretely, a *transfer* operation occurs whenever a non-`Sendable` value
-is passed as an argument to an asynchronous callee function that is of a
-different isolation domain that the value's caller. In contrast, whenever a
-non-`Sendable` value is passed to a synchronous function or an asynchronous
-function from the same isolation domain, we just perform region merging without
-changing the ownership of the value's region. Be aware that actor values are
-passed over *isolation boundaries* without transferring their region unless one
-annotates the actor with the new `transferring` attribute which we elaborate
-upon in the extensions below.
+In more general terms, *transferring* a value into a function means that the
+value is isolated and that when the function executes the only way to reference
+value or anything within value's region is via the parameter bound to value
+inside the function. In this proposal, we are defining the default convention
+for passing non-`Sendable` values from one isolation domain to another as being
+a transfer operation. In order to make transferring a convention in other
+contexts, one could implement a general `transferring` function attribute that
+would force these semantics in other cases. We describe this as an extension
+below.
 
 ### Taxonomy of Isolation Regions
 
@@ -506,38 +509,38 @@ There are three types of *isolation regions* that a *region isolatable* value
 can belong to that determine the rules for transferring value over an *isolation
 boundary*. We discuss them below.
 
-#### Local Disconnected Isolation Regions
+#### Non-Isolated Isolation Regions
 
-A local disconnected region is a region that consists only of non-`Sendable`
-values and is not associated with a specific *isolation domain*. Instead they
-are formed within the ambient isolation domain where the non-`Sendable` values
-that make up the region are constructed. A value in a disconnected region can be
-transferred to another *isolation domain* as long as it is used uniquely by said
-isolation domain. If one uses the region from multiple *isolation domains*, an
-error will result since a race could occur.
+A *non-isolated isolation region* is a region that consists only of
+non-`Sendable` values and is not associated with a specific *isolation
+domain*. A value in a non-isolated region can be transferred to another
+*isolation domain* as long as the value is used uniquely by said isolation
+domain and never used later outside of that isolation domain lest we introduce
+races:
 
 ```swift
-func transferToGlobal<T>(_ t: T) async { ... }
+@MainActor func transferToMain<T>(_ t: T) async { ... }
 
 actor Actor {
-  func method() {
+  func method() async {
     let x = NonSendable()
+    // Regions: [x]
 
-    transferToGlobal(x)
+    await transferToMain(x)
+    // Regions: [{x, @MainActor}]
 
-    print(x) // Error! x's region belongs to multiple isolation domains...
+    print(x) // Error! x being used outside of @MainActor isolated code.
   }
 }
 ```
 
 #### Actor Isolated Regions
 
-An actor isolated region is a isolation region that is self-isolated to a
-specific actor's isolation domain. Since the region is tied to an actor's
-isolation domain, the non-`Sendable` elements of the region can *never* be
-transferred into another isolation domain since that would cause the
-non-`Sendable` value to both be owned by the actor's isolation domain and the
-destination isolation domain allowing for races:
+An *actor isolated region* is a region that is strongly bound to a specific
+actor's isolation domain. Since the region is tied to an actor's isolation
+domain, the values of the region can *never* be transferred into another
+isolation domain since that would cause the non-`Sendable` value to be used by
+code both inside and outside the actor's isolation domain allowing for races:
 
 ```swift
 actor Actor {
@@ -560,25 +563,10 @@ actor Actor {
 }
 ```
 
-In contrast, an actor reference itself can be passed into other isolation
-domains since any of the isolated non-`Sendable` state within the actor will
-never be accessed directly from the destination isolation domain due to the
-rules of actor isolation:
-
-```swift
-@MainActor func actorsCanBePassedOverBoundaries() async {
-  let a = Actor()
-
-  // This is safe since the actor's own isolation will prevent races.
-  await transferToMain(a)
-}
-```
-
 The objects that make up an actor region varies depending on the kind of actor:
 
-* **Actor**. An actor region for an actor contains the actor instance, the
-  actor's non-sendable fields, and values derived from the actor instance or
-  fields.
+* **Actor**. An actor region for an actor contains the actor's non-sendable
+  fields and any values derived from the actor's fields.
 
   ```swift
   class NonSendableLinkedList {
@@ -591,10 +579,15 @@ The objects that make up an actor region varies depending on the kind of actor:
     func method() async {
       // x is part of self's region since listHead is part of self's region.
       let x = self.listHead
+      // Regions: [{x, self}]
+      
       // Since the assignment flows transitively, also y via x is part of self's region.
       let y = x
+      // Regions: [{(x, y), self}]
+      
       // z is part of self's region since transitively next must also be part of self's region.
       let z = self.listHead.next!
+      // Regions: [{(x, y, z), self}]
       ...
     }
   }
@@ -606,7 +599,8 @@ The objects that make up an actor region varies depending on the kind of actor:
   isolated global variable or nominal types.
 
   ```swift
-  @GlobalActor var globalActor: NonSendableLinkedList
+  @GlobalActor var firstList: NonSendableLinkedList
+  @GlobalActor var secondList: NonSendableLinkedList
   
   @GlobalActor func useGlobalActor() async {
     // x is a reference to globalActor's instance so is part of globalActor region.
@@ -927,6 +921,8 @@ like to loosen these rules. The way that we do this is that:
   that a closure belongs to, if a closure due to region merging belongs to an
   actor region with multiple actors, we can still pass it off and invoke it
   since we can dynamically swap to the actor.
+
+### async let and coroutines
 
 ## Source compatibility
 
