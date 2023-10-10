@@ -281,7 +281,7 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    ```
 
 3. If `y` is mutable binding (e.x.: `var`) and:
-   1. is not captured in a closure and passed inout then `y`'s previous region is not merged into `y`'s
+   1. is not passed by reference into a closure then `y`'s previous region is not merged into `y`'s
       new region when y is assigned a new value.
       
       ```swift
@@ -308,7 +308,7 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
       }
       ```
       
-   2. previously captured and passed inout in the current function, then we merge
+   2. previously captured by reference in the current function, then we merge
       the region associated with `y`'s previous value with the resulting region of
       the assignment.
       
@@ -364,8 +364,15 @@ Now lets apply these rules to some specific examples:
     // Regions: [x]
     let y = x
     // Regions: [(x, y)]
+    let z = consume x
+    // Regions: [(x, y, z)]
   }
   ```
+  
+  The reason why `consume` does not cause `x` to no longer be in the region is
+  that the consume rule is applied /after/ regions have been evaluated. This
+  does not affect the output of region analysis, since a valid program must
+  still obey the no-reuse constraints of consume.
 
 * **Assigning a var binding**. ``y = x``. Assigning a var binding `y` with `x`
   results in `y` being in the same region as `x`. If `y` is not captured by
@@ -386,7 +393,8 @@ Now lets apply these rules to some specific examples:
   ```
   
   In contrast if `y` was captured by a closure, then `y`'s former region is
-  merged with the region of `x` due to `(3)(ii)`.
+  merged with the region of `x` due to `(3)(ii)`. This can happen by either
+  capturing the var and passing it inout to a function:
   
   ```swift
   // Since we pass x as inout in the closure, the closure has to capture x by
@@ -401,7 +409,13 @@ Now lets apply these rules to some specific examples:
     x = y
     // Regions: [(x, closure, y)]
   }
+  ```
+  
+  or by escaping the capturing closure in a manner that ensures that the closure
+  lives outside of the lifetime of the current function invocation for example
+  by being returned from the function:
 
+  ```swift
   // Since we return the closure, we capture x by reference.
   func mutableBindingAssignmentClosureReturn() -> (() -> ()) {
     var x = NonSendable()
@@ -422,28 +436,64 @@ Now lets apply these rules to some specific examples:
   access is equivalent to calling a getter passing `x` as `self`. Importantly
   this property forces all non-`Sendable` data structures to form one large
   region:
+  
+  ```swift
+  func assignFieldToValue() {
+    let x = NonSendableStruct()
+    // Regions: [x]
+    let y = x.field
+    // Regions: [(x, y)]
+  }
+  ```
 
 * **Setting a non-`Sendable` field of a non-`Sendable` value**. ``y.f =
   x``. Assigning `x` into a field `y.f` results in `y` and `y.f` being in the
-  same region as `x`. This again follows from `(2)`.
+  same region as `x`. This again follows from `(2)`:
+  
+  ```swift
+  func assignValueToField() {
+    let x = NonSendableStruct()
+    // Regions: [x]
+    let y = NonSendable()
+    // Regions: [x, y]
+    x.field = y
+    // Regions: [(x, y)]
+  }
+  ```
 
 * **Capturing non-`Sendable` values in a closure**. ``closure = { useX(x);
   useY(y) }``. Capturing non-`Sendable` values `x` and `y` results in `x` and
   `y` being in the same region. This can be viewed as a consequence of `(2)`
   since `x` and `y` are formally arguments to the closure formation. This also
-  means that the closure must be part of that same region.
-
-* **Capturing a non-`Sendable` value in a closure that passes it
-  inout**. ``closure = { useXInOut(&x) }``. Capturing a non-`Sendable` value `x`
-  in a closure that passes it inout to a function results in the closure being
-  places into `x`'s region and any further assignments to `x` being region
-  merges instead of region assigns.
+  means that the closure must be part of that same region. If the closure
+  captures the value by reference due to the conditions mentioned above, then
+  when we assign over the captured variable, we do not forget the previous
+  region (see "assigning var" above for examples):
+  
+  ```swift
+  func captureInClosure() {
+    let x = NonSendable()
+    // Regions: [x]
+    let closure = { print(x) }
+    // Regions: [(x, closure)]
+  }
+  ```
 
 * **Function arguments in the body of a function**. Given a function `func
-  transfer(x: RegionIsolatable, y: RegionIsolatable) async`, in the body of
+  transfer(x: NonSendable, y: NonSendable) async`, in the body of
   `transfer`, `x` and `y` are considered to be within the same region. Since
   `self` is a function argument to methods, this implies that when `self` is
-  non-`Sendable` all method arguments must be in the same region as `self`.
+  non-`Sendable` all method arguments must be in the same region as `self`:
+  
+  ```swift
+  func transfer(x: NonSendable, y: NonSendable) {
+    // Regions: [(x, y)]
+    let z = NonSendable()
+    // Regions: [(x, y), z]
+    f(x, z)
+    // Regions: [(x, y, z)]
+  }
+  ```
 
 #### Control Flow
 
