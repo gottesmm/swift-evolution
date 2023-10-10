@@ -745,10 +745,22 @@ conservatively so we can handle both the true transferring and non-transferring
 cases the same way. This restriction can be loosened via the introduction of an
 explicit function argument convention that binds also callers called
 `transferring` that that would cause non-`Sendable` values to be transferred
-even when a callee is not an *isolation boundary*. We discuss this convention as
+even when a callee is not an isolation boundary. We discuss this convention as
 an extension below.
 
-If a function argument isolation region is 
+If a function argument isolation region is for a:
+
+* non-isolated function then the region is considered to be non-isolated to a
+  specific isolation domain.
+
+* method with isolated self then the region is considered to be isolated to
+  isolated self's isolation domain and in the actor's region. The reason for
+  this is that conservatively the value may have been state passed in from our
+  caller from an actor method and it is always safe to have a region that is too
+  big.
+
+// TODO: Could we maybe merge function argument into the above regions and make
+// this a special caveat for them? It would eliminate another category of rule.
 
 #### Merging Isolation Regions
 
@@ -852,12 +864,18 @@ our specific kinds of isolation regions:
   Merging a function argument region that contains an actor with a disconnected
   region works similarly to merging an actor isolated region 
 
-* **Function Argument and Actor Isolated**. A function argument region and an
-  actor isolated region can only be merged by the assignment of an actor
-  method's argument to a field of the actor. In such a case, the function
-  argument joins the actors isolation domain. Since in the method we are already
-  within the actor's isolation domain, we can do this assignment without needing
-  to transfer, respecting our function argument invariants. And since
+* **Function Argument and Actor Isolated**. A function argument isolation region
+  that is non-isolated can never be merged with an actor isolation region
+  since, we would need to transfer the value to merge with the actor's
+  isolation region... but function argument regions cannot be transferred. In contrast, we can
+
+A function argument isolation region
+  can only be merged with an actor isolation region. This is because:
+  
+  1. 
+     
+  2. If we have a function argument to a method, then the function argument is
+     already isolated to the actor.
 
 ### non-`Sendable` Closures
 
