@@ -101,7 +101,7 @@ reused:
 func openNewAccount(name: String, initialBalance: Double) async {
     let client = Client(name: name, initialBalance: initialBalance)
     await ClientStore.clientStore.addClient(client)
-    client.log() // Error! Already passed out of isolation domain... this could race!
+    client.logToAuditStream() // Error! Already passed out of isolation domain... this could race!
 }
 ```
 
