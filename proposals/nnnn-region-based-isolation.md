@@ -748,6 +748,8 @@ explicit function argument convention that binds also callers called
 even when a callee is not an *isolation boundary*. We discuss this convention as
 an extension below.
 
+If a function argument isolation region is 
+
 #### Merging Isolation Regions
 
 Our isolation region rules require us to merge regions when passing two
@@ -774,7 +776,8 @@ our specific kinds of isolation regions:
 * **Non-Isolated and Actor Isolated**. Merging the non-`Sendable` and actor
   isolation regions results in a new actor isolated region. This forces all
   values in non-isolated region to be treated as if they are isolated to the
-  actor. This can only occur when calling a method on an actor:
+  actor. This can only occur when calling a method on an actor or assigning into
+  an actor's field:
 
   ```swift
   func example1() async {
@@ -789,101 +792,46 @@ our specific kinds of isolation regions:
     // Error! x is now within a's region and a's isolation domain. Thus it can no longer
     // be used outside of a's isolation domain.
     useValue(x)
+
+    let y = NonSendable()
+    // Regions: [{(x), a}, (y)]
+    
+    a.field = y
+    // Regions: [{(x, y), a}]
+
+    // Error! Cannot use value outside of a's isolation domain.
+    useValue(y)
   }
   ```
-  
-  and can also occur when passing both an actor and a non-`Sendable` value to
-  the same function:
-  
-  MG: Discussion. The below can never actually transfer x
-  into the a since we can only transfer x into a if we have an async function,
-  but x will be a parameter, so we couldn't transfer it further into a in
-  useValues since function arguments cannot be transferred. Maybe we make a
-  distinction in between actor values (which do not merge with other regions)
-  and actor isolated values which would merge?
 
+* **Actor isolated and Actor isolated**. Due to actor isolation, two actor
+  isolation regions can never join into the same region. This can be seen since
+  to do so we would need to transfer part of one actor isolated value from one
+  actor to another which would be an error. If we attempted to use conditional
+  control flow and two different actors, we would still get a value that could
+  never be used:
+  
   ```swift
-  func example2() async {
-    func useValues(_ first: NonSendable, _ second: Actor) async { ... }
-
+  func test() async {
+    let a1 = Actor()
+    let a2 = Actor()
     let x = NonSendable()
-    let a = Actor()
-
-    // Even though useValues is in the same isolation domain as example2, we
-    // do not know if useValues will move x into a's isolation domain... so
-    // we need to merge x into a's region and treat it as if it was transferred. Since function arguments cannot be transferred further within the function, we know that conservatively 
-    //
-    // NOTE: This can never occur with synchronous functions since we can only
-    // access a's isolated state asynchronously.
-    await useValues(x, a)
-
-    // Error! x is within actor a's isolation domain cannot be used anymore.
-    //
-    // By putting x into a's isolation domain, we must treat it like it is
-    // actor isolated state, so we cannot use it further in the function.
-    useValue(x)
+    // Regions: [(x)]
+    
+    if await boolean {
+      await a1.useNS(x)
+      // Regions: [{(x), a1}]
+    } else {
+      await a2.useNS(x)
+      // Regions: [{(x), a2}]
+    }
+    // We can no longer use x since it has been transferred to one of a1 or a2.
   }
   ```
-  
-  It would also be safe to pass `x` to a method on `a` though since we know that
-  `x` cannot have any further uses non-isolated to `a`:
-  
-  ```swift
-  func example2() async {
-    func useValues(_ first: NonSendable, _ second: Actor) async { ... }
 
-    let x = NonSendable()
-    let a = Actor()
-
-    await useValues(x, a)
-
-    // This is ok since we are passing x into a's isolation domain.
-    await a.useValue(x)
-  }
-  ```
-  
-* **Actor isolated and Actor isolated**. Even though two actors can never
-  actually be within the same *isolation region* in certain cases due to the
-  conservatism of our analysis, we need to consider an actor isolated region
-  that is isolated to two different *isolation domain* at the same time as a
-  result of merging:
-  
-  ```swift
-  var a: Actor? = nil
-  let firstActor = Actor1()
-  let secondActor = Actor2()
-  if booleanTest() {
-    a = firstActor
-  } else {
-    a = secondActor
-  }
-  // The region of a at this point must contain both firstActor and secondActor
-  // due to the region merge.
-  ```
-  
-  The effect of this merge is:
-  
-  * We can still transfer either of the actor elements and call methods on the
-    actors since the actor's own isolation will ensure that we will always
-    access the parts of the actor within their own regions.
-
-  * Any non-`Sendable` values that become part of the region that are not within
-    the actor themselves cannot be used later since they could be part of
-    multiple isolation domains and we do not want to introduce races.
-
-  MG: This causes a problem since we would have an isolation region in two
-  different isolation domains =><=. The contradiction is on the one hand we want
-  to have closure take in the merged isolation of the actor so we want to track
-  actor regions... but on the other hand, we do not want to allow for the
-  example above to force a, b to be part of the same region. The problem can
-  only happen with passing an actor since we cannot transfer non-`Sendable`
-  state from the actor's isolation domain. Only can pass the actor itself.
-
-* **Function Argument and Non-Isolated**. Merging a function argument that only
-  contains non-`Sendable` parameters and disconnected region results in a
-  function argument region containing the union of the two regions. Since the
-  subsequent region is a function argument region with only non-`Sendable`
-  values, the region values can no longer be transferred:
+* **Function Argument and Non-Isolated**. Merging a function argument region and
+  a non-isolated region results in one larger functiona rgument region
+  containing the union of the two regions:
   
   ```swift
   // y is in a function argument region.
@@ -904,8 +852,12 @@ our specific kinds of isolation regions:
   Merging a function argument region that contains an actor with a disconnected
   region works similarly to merging an actor isolated region 
 
-* **Function Argument and Actor Isolated**. Fill this in! Similar to the others
-  depending on whether the function argument has actor contents or not.
+* **Function Argument and Actor Isolated**. A function argument region and an
+  actor isolated region can only be merged by the assignment of an actor
+  method's argument to a field of the actor. In such a case, the function
+  argument joins the actors isolation domain. Since in the method we are already
+  within the actor's isolation domain, we can do this assignment without needing
+  to transfer, respecting our function argument invariants. And since
 
 ### non-`Sendable` Closures
 
