@@ -865,23 +865,19 @@ our specific kinds of isolation regions:
   region works similarly to merging an actor isolated region 
 
 * **Function Argument and Actor Isolated**. A function argument isolation region
-  that is non-isolated can never be merged with an actor isolation region
-  since, we would need to transfer the value to merge with the actor's
-  isolation region... but function argument regions cannot be transferred. In contrast, we can
+  that is non-isolated can never be merged with an actor isolation region since,
+  we would need to transfer the value to merge with the actor's isolation
+  region, but function argument regions cannot be transferred. In contrast, if a
+  function argument region is on a method, it is part of the actor isolated
+  region anyways and thus no merging is needed.
 
-A function argument isolation region
-  can only be merged with an actor isolation region. This is because:
-  
-  1. 
-     
-  2. If we have a function argument to a method, then the function argument is
-     already isolated to the actor.
+> MG: See TODO Above in Function Argument Section.
 
 ### non-`Sendable` Closures
 
 Currently non-`Sendable` closures like other non-`Sendable` values are not
 allowed to be passed over isolation boundaries since they may have captured
-state from within the *isolation domain* in which the closure is defined. We would
+state from within the isolation domain in which the closure is defined. We would
 like to loosen these rules. The way that we do this is that:
 
 * A non-isolated non-Sendable closure can be transferred into another isolation
@@ -937,7 +933,7 @@ like to loosen these rules. The way that we do this is that:
   ```
   
   In the future, we may be able to accept this code in the future if we allowed
-  for isolated closures to propagate around the specific *isolation domain* that
+  for isolated closures to propagate around the specific isolation domain that
   they belonged to and dynamically swap to it. We discuss *dynamic isolation
   domains* as an extension below.
   
@@ -946,7 +942,32 @@ like to loosen these rules. The way that we do this is that:
   actor region with multiple actors, we can still pass it off and invoke it
   since we can dynamically swap to the actor.
 
-### async let and coroutines
+### async let and non-isolated functions
+
+Swift supports future like functionality via async let. When a non-`Sendable`
+type is passed to a non-isolated function that is bound to an async let, the
+value is temporarily transferred outside of the current isolation domain causing
+the value to be unavailable for use until the async let is awaited upon:
+
+```swift
+let x = NonSendable()
+async let y = nonIsolatedFunc(x)
+print(x) // Error! x is used while transferred out of current isolation domain
+await y
+print(x) // Safe since x is no longer being used by nonIsolatedFunc.
+```
+
+In contrast, if the async let function was specifically isolated to an actor,
+then we have transferred away the value into that other isolation domain and can
+no longer use it locally:
+
+```swift
+let x = NonSendable()
+async let y = transferToMain(x)
+print(x) // Error! x was already transferred into the main actor!
+await y
+print(x) // Error! x was already transferred into the main actor!
+```
 
 ## Source compatibility
 
