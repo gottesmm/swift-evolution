@@ -271,7 +271,7 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    ```
 
 3. If `y` is mutable binding (e.x.: `var`) and:
-   1. not captured by reference then `y`'s previous region is not merged into `y`'s
+   1. is not captured in a closure and passed inout then `y`'s previous region is not merged into `y`'s
       new region. This is called a "region assign".
       
       ```swift
@@ -282,12 +282,18 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
         let x2 = NonSendable()
         let x3 = NonSendable()
         var y = x3
-      
-        // At this point, x3 and y are in the same region.
-        // Regions: [x1, x2, (x3, y)]
+        
+        let closure = {
+          print(y)
+        }
+        
+        // At this point, y and closure are in the same region.
+        // Regions: [x1, x2, (x3, y, closure)]
         y = await transferToGlobal(x1, x2)
-        // After evaluating transferToGlobal, x3 and y are now in different regions.
-        // Regions: [(x1, x2, y), x3]
+        
+        // After evaluating transferToGlobal, y and closure are now in different
+        // regions.
+        // Regions: [(x1, x2, y), (x3, closure)]
       }
       ```
       
@@ -301,16 +307,18 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
         let x2 = NonSendable()
         let x3 = NonSendable()
         var y = x3
-      
+        
         let closure = {
           useInOut(&y)
         }
-      
-        // At this point, x3 and y are in the same region.
-        // Regions: [x1, x2, (x3, y)]
+        
+        // At this point, closure and y are in the same region.
+        // Regions: [x1, x2, (x3, y, closure)]
         y = await transferToGlobal(x1, x2)
-        // After evaluating transferToGlobal, x3 and y are still in the same region.
-        // Regions: [(x1, x2, x3, y)]
+        
+        // After evaluating transferToGlobal, closure and y are still in the same region since
+        // if we invoked closure later, we would access y's memory.
+        // Regions: [(x1, x2, x3, y, closure)]
       }
       ```
 
@@ -320,7 +328,8 @@ any further type information:
 * Any of the `xi` inside of `f` could become reachable from each other.
 * `y` could be one of the `xi` or alias contents of the `xi`.
 * If `y` previously was captured by reference then the new value stored into
-`y` could be referenced via calling the closure.
+`y` could be referenced via calling the closure since the inout will cause
+`y` to be left as a box reference.
 
 By using additional type information, we can make this less conservative (see
 extensions), but as a general set of rules, these guide us.
