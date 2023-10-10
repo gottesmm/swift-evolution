@@ -356,20 +356,72 @@ Now lets apply these rules to some specific examples:
   `x`. This follows from `(2)` since formally a copy is equivalent to calling a
   property on `x` that takes `x` as self and returns a copy of `x`. Performing a
   `consume` of `x` would analogously via `(2)` also result in `y` being in the
-  same region as `x`.
+  same region as `x`:
+  
+  ```swift
+  func bindingInitialization() {
+    let x = NonSendable()
+    // Regions: [x]
+    let y = x
+    // Regions: [(x, y)]
+  }
+  ```
 
 * **Assigning a var binding**. ``y = x``. Assigning a var binding `y` with `x`
-  results in `y` being in the same region as `x`. If `y` is not captured by a
-  closure, then `y`'s previous assigned region is forgotten due to `(3)(i)`. In
-  contrast if `y` was captured by a closure, then `y`'s former region is merged
-  with the region of `x` due to `(3)(ii)`.
+  results in `y` being in the same region as `x`. If `y` is not captured by
+  reference in a closure, then `y`'s previous assigned region is forgotten due
+  to `(3)(i)`:
+  
+  ```swift
+  func mutableBindingAssignmentSimple() {
+    var x = NonSendable()
+    // Regions: [x]
+    let closure = { print(x) }
+    // Regions: [(x, closure)]
+    let y = NonSendable()
+    // Regions: [(x, closure), y]
+    x = y
+    // Regions: [closure, (x, y)]
+  }
+  ```
+  
+  In contrast if `y` was captured by a closure, then `y`'s former region is
+  merged with the region of `x` due to `(3)(ii)`.
+  
+  ```swift
+  // Since we pass x as inout in the closure, the closure has to capture x by
+  // reference.
+  func mutableBindingAssignmentClosure() {
+    var x = NonSendable()
+    // Regions: [x]
+    let closure = { useInOut(&x) }
+    // Regions: [(x, closure)]
+    let y = NonSendable()
+    // Regions: [(x, closure), y]
+    x = y
+    // Regions: [(x, closure, y)]
+  }
+
+  // Since we return the closure, we capture x by reference.
+  func mutableBindingAssignmentClosureReturn() -> (() -> ()) {
+    var x = NonSendable()
+    // Regions: [x]
+    let closure = { print(x) }
+    // Regions: [(x, closure)]
+    let y = NonSendable()
+    // Regions: [(x, closure), y]
+    x = y
+    // Regions: [(x, closure, y)]
+    return closure
+  }
+  ```
 
 * **Reading a field of a non-Sendable value**. ``let y = x.f``. Accessing a
   field `f` on a non-`Sendable` value `x` results in a value `y` that must be in
   the same region as `x`. This follows from `(2)` since formally a property
   access is equivalent to calling a getter passing `x` as `self`. Importantly
   this property forces all non-`Sendable` data structures to form one large
-  region.
+  region:
 
 * **Setting a non-`Sendable` field of a non-`Sendable` value**. ``y.f =
   x``. Assigning `x` into a field `y.f` results in `y` and `y.f` being in the
