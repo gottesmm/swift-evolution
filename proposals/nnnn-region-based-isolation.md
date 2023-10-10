@@ -969,6 +969,66 @@ await y
 print(x) // Error! x was already transferred into the main actor!
 ```
 
+### Simplifying non-isolated initializers via transferring
+
+All of the above discussions involved actors in the context of an isolated self
+parameter. When we have a non-isolated self parameter, we need to behave
+differently. As a reminder when we are within a method where self is
+non-isolated, we cannot touch any isolated state within the actor without
+performing an async call into the actor to ensure that we switch onto the
+actor's executor:
+
+```swift
+actor Actor {
+  var ns: NonSendable
+
+  func isolatedMethod() { ... }
+
+  nonisolated func method() {
+    // Error! Cannot access isolated state!
+    let n = ns
+
+    // Error! Cannot access isolated state!
+    self.isolatedMethod()
+
+    // Ok, we switch onto the actors executor.
+    await self.isolatedMethod()
+  }
+}
+```
+
+We propose to loosen this requirement in situations where the compiler knows
+that the value has been fully caller and callee transferred into the nonisolated
+function and furthermore define designated initializers to transfer self. Since
+`self` in such a case will have been fully transfered by the caller in all
+cases, we know that `self` and its entire region cannot be accessed by any other
+part of the program. Since `transferring` provides a strong form of isolation
+for self, it now becomes safe to access stored properties of self once more
+until we escape self, breaking our strong isolation created by `transferring`:
+
+```
+actor Actor {
+  var ns: NonSendable
+
+  init() {
+    // Ok. We haven't escaped self yet.
+    let n = ns
+
+    // We escaped self breaking our transfer property.
+    escapeSelfIntoNonIsolated(self)
+
+    // Error! Safety of transferring has been broken.
+    let _ = ns
+  }
+}
+```
+
+In the current proposal, this only will apply to designated initializers, via
+the usage of the `transferring` self, this property can be applied to general
+non-isolated methods. See extensions for more information.
+
+### Passing 
+
 ## Source compatibility
 
 This proposal strictly expands the set of acceptable Swift programs, so all
@@ -1028,63 +1088,6 @@ This in practice means that:
     }
   }
   ```
-
-### Simplifying non-isolated initializers via transferring
-
-All of the above discussions involved actors in the context of an isolated self
-parameter. When we have a non-isolated self parameter, we need to behave
-differently. As a reminder when we are within a method where self is
-non-isolated, we cannot touch any isolated state within the actor without
-performing an async call into the actor to ensure that we switch onto the
-actor's executor:
-
-```swift
-actor Actor {
-  var ns: NonSendable
-
-  func isolatedMethod() { ... }
-
-  nonisolated func method() {
-    // Error! Cannot access isolated state!
-    let n = ns
-
-    // Error! Cannot access isolated state!
-    self.isolatedMethod()
-
-    // Ok, we switch onto the actors executor.
-    await self.isolatedMethod()
-  }
-}
-```
-
-We propose to loosen this requirement in situations where the compiler knows
-that the value has been fully caller and callee transferred into the nonisolated
-function. Since `self` in such a case will have been fully transfered by the
-caller in all cases, we know that `self` and its entire region cannot be
-accessed by any other part of the program.
-
-Since `transferring` provides a strong form of isolation for self, it now
-becomes safe to access stored properties of self once more until we escape self,
-breaking our strong isolation created by `transferring`:
-
-```
-actor Actor {
-  var ns: NonSendable
-
-  func isolatedMethod() { ... }
-
-  transferring nonisolated func method() {
-    // Ok. We haven't escaped self yet.
-    let n = ns
-
-    // We escaped self breaking our transfer property.
-    escapeSelfIntoNonIsolated(self)
-
-    // Error! Safety of transferring has been broken.
-    let _ = ns
-  }
-}
-```
 
 #### Returning Isolated
 
