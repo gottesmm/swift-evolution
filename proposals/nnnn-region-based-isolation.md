@@ -430,11 +430,12 @@ optimistic forward dataflow problem that allows us to determine at every point
 of the program the isolation region that a value belongs to. We outline this
 dataflow in more detail in an [appendix](#isolation-region-dataflow) to this proposal.
 
-### Transferring, Region Isolatable Values, Isolation Regions, and Isolation Domains.
+### Transferring Values, Isolation Regions, and Isolation Domains.
 
-As defined above, all *region isolatable* values in a Swift program belong to an
-*isolation region*. An *isolation region* is either non-isolated or assigned to
-an *isolation domain* that uniquely owns the *isolation region*:
+Now that we have defined isolation regions, we define the rest of our tersm. All
+non-`Sendable` values in a Swift program belong to an *isolation region*. An
+*isolation region* is either non-isolated or assigned to an *isolation domain*
+that uniquely owns the *isolation region*:
 
 ```swift
 actor Actor {
