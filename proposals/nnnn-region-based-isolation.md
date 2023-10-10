@@ -265,7 +265,7 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    y is within a new region that consists only of y.
    
    ```swift
-   // Rule 2. region isolatable results of an synchronous or async non-transferring function take on
+   // Rule 2. Results of an synchronous or async non-transferring function take on
    // the merged region of their arguments. If no arguments, gets a fresh region.
    func rule2() async {
      let x1 = NonSendable()
@@ -364,44 +364,40 @@ Now lets apply these rules to some specific examples:
   contrast if `y` was captured by a closure, then `y`'s former region is merged
   with the region of `x` due to `(3)(ii)`.
 
-* **Reading a field of a region isolatable value**. ``let y = x.f``. Accessing a
-  field `f` on a region isolatable value `x` results in a value `y` that must be in
+* **Reading a field of a non-Sendable value**. ``let y = x.f``. Accessing a
+  field `f` on a non-`Sendable` value `x` results in a value `y` that must be in
   the same region as `x`. This follows from `(2)` since formally a property
   access is equivalent to calling a getter passing `x` as `self`. Importantly
-  this property forces all region isolatable data structures to form one large
+  this property forces all non-`Sendable` data structures to form one large
   region.
 
-* **Setting a region isolatable field of a region isolatable value**. ``y.f =
+* **Setting a non-`Sendable` field of a non-`Sendable` value**. ``y.f =
   x``. Assigning `x` into a field `y.f` results in `y` and `y.f` being in the
   same region as `x`. This again follows from `(2)`.
 
-* **Setting a non-region isolatable field of a region isolatable value**. ``y.f
-  = x``. This can only occur when setting a `Sendable` field of an actor. In
-  such a case since x, the `Sendable` value, does not have a region, `y`'s
-  region stays the same.
-
-* **Capturing region isolatable values in a closure**. ``closure = { useX(x);
-  useY(y) }``. Capturing region isolatable values `x` and `y` results in `x` and
+* **Capturing non-`Sendable` values in a closure**. ``closure = { useX(x);
+  useY(y) }``. Capturing non-`Sendable` values `x` and `y` results in `x` and
   `y` being in the same region. This can be viewed as a consequence of `(2)`
   since `x` and `y` are formally arguments to the closure formation. This also
   means that the closure must be part of that same region.
 
-* **Capturing a reference to region isolatable values in a closure**. ``closure = {
-  useXInOut(&x) }``. Capturing a reference to a non-sendable value `x` results
-  in closure being placed into `x`'s region and any further assignments to `x`
-  being region merges instead of region assigns.
+* **Capturing a non-`Sendable` value in a closure that passes it
+  inout**. ``closure = { useXInOut(&x) }``. Capturing a non-`Sendable` value `x`
+  in a closure that passes it inout to a function results in the closure being
+  places into `x`'s region and any further assignments to `x` being region
+  merges instead of region assigns.
 
 * **Function arguments in the body of a function**. Given a function `func
   transfer(x: RegionIsolatable, y: RegionIsolatable) async`, in the body of
   `transfer`, `x` and `y` are considered to be within the same region. Since
   `self` is a function argument to methods, this implies that when `self` is
-  region isolatable all method arguments must be in the same region as `self`.
+  non-`Sendable` all method arguments must be in the same region as `self`.
 
 #### Control Flow
 
 The above rules show how isolation regions change at specific program points,
 but do not explain how isolation regions are affected by control flow. Given two
-region isolatable values `x` and `y` in a control flow block, we say that `x`
+non-`Sendable` values `x` and `y` in a control flow block, we say that `x`
 and `y` are in the same region in the control flow block if in any of the
 control flow block's predecessor blocks they are in the same region. For
 instance:
@@ -505,8 +501,8 @@ below.
 
 ### Taxonomy of Isolation Regions
 
-There are three types of *isolation regions* that a *region isolatable* value
-can belong to that determine the rules for transferring value over an *isolation
+There are three types of *isolation regions* that a non-`Sendable` value can
+belong to that determine the rules for transferring value over an *isolation
 boundary*. We discuss them below.
 
 #### Non-Isolated Isolation Regions
@@ -619,14 +615,14 @@ the actor. We discuss this an extension below.
 #### Function Argument Region
 
 A function argument region is a single *isolation region* associated with a
-callee's *region isolatable* arguments. If a function's *region isolatable*
-arguments only consist of non-`Sendable` values, then it acts like a
-disconnected region and is not associated with a specific actor's isolation
-domain, but unlike a disconnected region can never be transferred. This is
-because statically one cannot know if the caller has transferred the *isolation
-region* to our callee or not. For instance, if our caller was in the same
-*isolation domain* as our callee, calling the callee would not result in a
-transfer meaning that it would be safe to use it later in the caller:
+callee's non-`Sendable` arguments. If a function's *region isolatable* arguments
+only consist of non-`Sendable` values, then it acts like a disconnected region
+and is not associated with a specific actor's isolation domain, but unlike a
+disconnected region can never be transferred. This is because statically one
+cannot know if the caller has transferred the *isolation region* to our callee
+or not. For instance, if our caller was in the same *isolation domain* as our
+callee, calling the callee would not result in a transfer meaning that it would
+be safe to use it later in the caller:
 
 ```swift
 @MainActor var g = NonSendable()
