@@ -4,7 +4,7 @@
 * Authors: [Michael Gottesman](https://github.com/gottesmm) [Joshua Turcotti](https://github.com/jturcotti)
 * Review Manager: TBD
 * Status: **Awaiting implementation** or **Awaiting review**
-* Implementation: available on public Github: [SendNonSendable.cpp](https://github.com/apple/swift/blob/main/lib/SILOptimizer/Mandatory/SendNonSendable.cpp)
+* Implementation: On `main` gated behind `-enable-experimental-feature SendNonSendable`
 * Upcoming Feature Flag: `SendNonSendable`
 * Review: ([pitch](https://forums.swift.org/t/pitch-safely-sending-non-sendable-values-across-isolation-domains/66566))
 
@@ -12,9 +12,9 @@
 
 Swift Concurrency assigns values to *isolation domains* determined by actor and
 task boundaries. Code running in distinct isolation domains are allowed to
-execute concurrently. As a result, `SE-SENDABLE` defines away data races by
-forbiding non-`Sendable` values from being passed over *isolation
-boundaries*. In practice this turns out to be a very significant semantic
+execute concurrently. As a result, SE-0302: Sendable and @Sendable closures
+defines away data races by forbiding non-`Sendable` values from being passed over
+*isolation boundaries*. In practice this turns out to be a very significant semantic
 restriction. In this document, we propose loosening these rules by introducing a
 new control flow sensitive diagnostic that determines whether a non-`Sendable`
 value can safely be transferred over an isolation boundary. This is done by
@@ -27,7 +27,7 @@ the value or other values that could affect the transferred value.
 
 ## Motivation
 
-`SE-SENDABLE` states that non-`Sendable` values cannot be sent across *isolation
+SE-0302 states that non-`Sendable` values cannot be sent across *isolation
 boundaries*. Thus given the following code that opens a new `ClientAccount` for
 a `Client` at a bank, we get an error in `openNewAccount` when strict
 concurrency is enabled since `Client` is not `Sendable` despite us having just
@@ -75,23 +75,17 @@ This is overly conservative since there cannot be any races in this code due to:
 * `client` not having any other local uses within `openNewAccount` beyond
   `addClient`.
 
-If Swift's language rules allowed the compiler to analyze the uses of `client`
-and prove the above two points, then this code could be determined to be race
-free and accepted as valid code.
-
-The simple example above shows the extreme expressivity limitations caused by
-Swift's current concurrency model. This will impede the updating of older
-libraries to use concurrency by requiring pervasive `Sendable` auditing as well
-as the development of new libraries. By introducing this new diagnostic, we can
-avoid that problem and provide a safe, intuitive model for the use of
-non-`Sendable` types.
+The simple example above shows the expressivity limitations of Swift's strict
+concurrency checking. The example requires unsafe escape hatches, such as
+`@unchecked Sendable` conformances, for common patterns that are already free of
+data races.
 
 ## Proposed solution
 
 We propose the introduction of a new control flow sensitive diagnostic that
 emits errors at use sites of non-`Sendable` values that previously were
 transferred to a different isolation domain. Our motivating example does not
-violate this rule since `client` is passed into a constructor and does not have
+violate this rule since `client` is passed into a initializer and does not have
 any further uses. But if we were to modify `openNewAccount` to call a function
 on `client`, we would violate this rule since a value that had already been
 transferred from a non-isolated context to an actor-isolated context would be
@@ -101,19 +95,19 @@ reused:
 func openNewAccount(name: String, initialBalance: Double) async {
     let client = Client(name: name, initialBalance: initialBalance)
     await ClientStore.clientStore.addClient(client)
-    client.logToAuditStream() // Error! Already passed out of isolation domain... this could race!
+    client.logToAuditStream() // Error! Already transferred into clientStore's isolation domain... this could race!
 }
 ```
 
-Even though it is unsafe to use `client` in `openBankAccount` after transferring
-`client` into `bankAccount`'s isolation domain, any other value that could
+Even though it is unsafe to use `client` in `openNewAccount` after transferring
+`client` into `clientStore`'s isolation domain, any other value that could
 statically be proven as being isolated from `client` could be used safely. To
 prove isolation here, we reason about equivalence classes of values called
 isolation regions. Formally, two values `x` and `y` are defined to be within
 the same isolation region at a program point `p` if:
 
 1. `x` may alias `y` at `p`.
-2. `x` or a part of `x` might be referenceable from `y` via chaining `y`'s properties at `p`.
+2. `x` or a part of `x` might be referenceable from `y` via chained access of `y`'s properties at `p`.
 
 This definition ensures that values that are in different isolation regions
 can be used concurrently since any code that uses `x` could not affect `y`. For
