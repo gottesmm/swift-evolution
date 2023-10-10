@@ -361,7 +361,7 @@ Now lets apply these rules to some specific examples:
   ```swift
   func bindingInitialization() {
     let x = NonSendable()
-    // Regions: [x]
+    // Regions: [(x)]
     let y = x
     // Regions: [(x, y)]
     let z = consume x
@@ -382,7 +382,7 @@ Now lets apply these rules to some specific examples:
   ```swift
   func mutableBindingAssignmentSimple() {
     var x = NonSendable()
-    // Regions: [x]
+    // Regions: [(x)]
     let closure = { print(x) }
     // Regions: [(x, closure)]
     let y = NonSendable()
@@ -401,7 +401,7 @@ Now lets apply these rules to some specific examples:
   // reference.
   func mutableBindingAssignmentClosure() {
     var x = NonSendable()
-    // Regions: [x]
+    // Regions: [(x)]
     let closure = { useInOut(&x) }
     // Regions: [(x, closure)]
     let y = NonSendable()
@@ -419,7 +419,7 @@ Now lets apply these rules to some specific examples:
   // Since we return the closure, we capture x by reference.
   func mutableBindingAssignmentClosureReturn() -> (() -> ()) {
     var x = NonSendable()
-    // Regions: [x]
+    // Regions: [(x)]
     let closure = { print(x) }
     // Regions: [(x, closure)]
     let y = NonSendable()
@@ -440,7 +440,7 @@ Now lets apply these rules to some specific examples:
   ```swift
   func assignFieldToValue() {
     let x = NonSendableStruct()
-    // Regions: [x]
+    // Regions: [(x)]
     let y = x.field
     // Regions: [(x, y)]
   }
@@ -453,7 +453,7 @@ Now lets apply these rules to some specific examples:
   ```swift
   func assignValueToField() {
     let x = NonSendableStruct()
-    // Regions: [x]
+    // Regions: [(x)]
     let y = NonSendable()
     // Regions: [x, y]
     x.field = y
@@ -473,7 +473,7 @@ Now lets apply these rules to some specific examples:
   ```swift
   func captureInClosure() {
     let x = NonSendable()
-    // Regions: [x]
+    // Regions: [(x)]
     let closure = { print(x) }
     // Regions: [(x, closure)]
   }
@@ -568,7 +568,7 @@ not belong to its own *isolation domain* since races could result:
 func assigningIsolationDomainsToIsolationRegions() async {
   // x is assigned to a new isolation region that is non-isolated and thus not assigned
   // to a specific isolation domain.
-  // Regions: [x]
+  // Regions: [(x)]
   let x = NonSendable()
 
   // Once y join's x's region, we expand the region, but the region is still
@@ -591,10 +591,11 @@ Formally, when we pass a non-`Sendable` value `v` into a function `f` that is of
 a different isolation domain from `v`, then we say that `v` and `v`'s region are
 *transferred* into `f`.
 
-In more general terms, *transferring* a value into a function means that the
-value is isolated and that when the function executes the only way to reference
-value or anything within value's region is via the parameter bound to value
-inside the function. In this proposal, we are defining the default convention
+In more general terms, *transferring* a value into a function means that when
+the function executes the only way to reference the value or anything within the
+value's region is via the parameter bound to value inside the function. This is
+a form of deep structural isolation similar to an actor except enforced at a
+single program point. In this proposal, we are defining the default convention
 for passing non-`Sendable` values from one isolation domain to another as being
 a transfer operation. In order to make transferring a convention in other
 contexts, one could implement a general `transferring` function attribute that
@@ -603,16 +604,16 @@ below.
 
 ### Taxonomy of Isolation Regions
 
-There are three types of *isolation regions* that a non-`Sendable` value can
-belong to that determine the rules for transferring value over an *isolation
-boundary*. We discuss them below.
+There are three types of isolation regions that a non-`Sendable` value can
+belong to that determine the rules for transferring value over an isolation
+boundary. We discuss them below.
 
 #### Non-Isolated Isolation Regions
 
 A *non-isolated isolation region* is a region that consists only of
-non-`Sendable` values and is not associated with a specific *isolation
-domain*. A value in a non-isolated region can be transferred to another
-*isolation domain* as long as the value is used uniquely by said isolation
+non-`Sendable` values and is not associated with a specific isolation
+domain. A value in a non-isolated region can be transferred to another
+isolation domain as long as the value is used uniquely by said isolation
 domain and never used later outside of that isolation domain lest we introduce
 races:
 
@@ -622,10 +623,10 @@ races:
 actor Actor {
   func method() async {
     let x = NonSendable()
-    // Regions: [x]
+    // Regions: [(x)]
 
     await transferToMain(x)
-    // Regions: [{x, @MainActor}]
+    // Regions: [{(x), @MainActor}]
 
     print(x) // Error! x being used outside of @MainActor isolated code.
   }
@@ -649,6 +650,7 @@ actor Actor {
   // Even though a is defined within an @MainActor isolated function,
   // a is still apart of its own isolation domain.
   let a = Actor()
+  // Regions: [{(a.nonSendable), a}]
 
   // Error! a.nonSendable is within a's region since it is a field of a.
   // By assigning into x, we are introducing x into a's region meaning that
@@ -677,7 +679,7 @@ The objects that make up an actor region varies depending on the kind of actor:
     func method() async {
       // x is part of self's region since listHead is part of self's region.
       let x = self.listHead
-      // Regions: [{x, self}]
+      // Regions: [{(x), self}]
       
       // Since the assignment flows transitively, also y via x is part of self's region.
       let y = x
@@ -701,10 +703,15 @@ The objects that make up an actor region varies depending on the kind of actor:
   @GlobalActor var secondList: NonSendableLinkedList
   
   @GlobalActor func useGlobalActor() async {
+    // Regions: [{(firstList, secondList), @GlobalActor}]
+
     // x is a reference to globalActor's instance so is part of globalActor region.
-    let x = globalActor
+    let x = firstList
+    // Regions: [{(x, firstList, secondList), @GlobalActor}]
+
     // y references listHead.next! so by composition is part of the actors region.
-    let y = globalActor.listHead.next!
+    let y = secondList.listHead.next!
+    // Regions: [{(x, firstList, secondList, y), @GlobalActor}]
     ...
   }
   ```
@@ -716,29 +723,25 @@ the actor. We discuss this an extension below.
 
 #### Function Argument Region
 
-A function argument region is a single *isolation region* associated with a
-callee's non-`Sendable` arguments. If a function's *region isolatable* arguments
-only consist of non-`Sendable` values, then it acts like a disconnected region
-and is not associated with a specific actor's isolation domain, but unlike a
-disconnected region can never be transferred. This is because statically one
-cannot know if the caller has transferred the *isolation region* to our callee
-or not. For instance, if our caller was in the same *isolation domain* as our
-callee, calling the callee would not result in a transfer meaning that it would
-be safe to use it later in the caller:
+A *function argument isolation region* is a region associated with a callee's
+non-`Sendable` arguments. Values in a function argument isolation region can not
+be transferred since we do not know if our caller transferred any of our
+parameters to our callee:
 
 ```swift
-@MainActor var g = NonSendable()
-@MainActor func useInMainActor(_ x: NonSendable) async {
-  g = x
-}
+@MainActor func useInMainActor(_ x: NonSendable) async { ... }
 
-@OtherGlobalActor func transferToMainActor(_ x: NonSendable) async {
+@OtherGlobalActor func callee(_ x: NonSendable) async {
+  // Error! Cannot transfer x since it is a function argument!
   await useInMainActor(x)
 }
 
-@OtherGlobalActor func useNonSendable(_ x: NonSendable) async {
-  await transferToMainActor(x)
-  // Can I use x here?
+@OtherGlobalActor func caller(_ x: NonSendable) async {
+  // Since callee is in the same isolation domain as caller, we do not actually
+  // transfer x into callee. If callee could perform the transfer, the print
+  // statement below would race.
+  await callee(x)
+  print(x)
 }
 ```
 
@@ -751,51 +754,6 @@ explicit function argument convention that binds also callers called
 even when a callee is not an *isolation boundary*. We discuss this convention as
 an extension below.
 
-If a function's *region isolatable* arguments contain actors, then it acts
-similar to an actor region: no parameters can be transferred, but the actor
-values can be passed over *isolation boundaries* since their internal actor
-isolation will maintain safety. Additionally, since we do not know if any of the
-non-`Sendable` parameters have escaped into one of the actor parameters, we must
-treat them as being part of the actor's isolation domain. This means that if we
-have multiple actor parameters, we cannot use non-`Sendable` parameters at all
-and if we have a single actor parameter, we can only use non-`Sendable`
-parameters if that actor parameter is the isolated parameter for this function.
-
-MG: Discussion. How do we handle cases where we have multiple actor arguments?
-Could say that we only merge function arguments into isolated actor parameter
-and other actors are independent regions? That might make sense since the
-non-`Sendable` parameters could not be in the same region as the non-isolated
-actor since we would have escaped the isolated actor information from the actor
-into the caller isolation domain which is illegal. One possible problem example
-is what if I pass in the same actor, one as the isolated parameter and one as a
-normal parameter:
-
-```swift
-extension Actor {
-  var ns = NonSendable()
-  
-  func useValue(_ x: NonSendable, _ y: Actor) async {}
-}
-
-func test() {
-  let a = Actor()
-  // This wouldn't compile b/c a.ns is leaving isolation domain. Would need to
-  // have the value within the isolation domain of a, so would have to be based off of self.
-  //
-  // This is the same as the non-self case where we would have leaked the actor
-  // isolated state outside.
-  await a.useValue(a.ns, a)
-}
-
-extension Actor {
-  func test() {
-    // Would it be safe to treat the non-isolated self parameter as region isolated
-    // from the isolated parameter?
-    self.useValue(self.ns, self)
-  }
-}
-```
-
 #### Merging Isolation Regions
 
 Our isolation region rules require us to merge regions when passing two
@@ -803,34 +761,36 @@ non-`Sendable` values to a function in the same isolation domain as the
 non-`Sendable` values. In such a case, we need to consider how to handle merging
 our specific kinds of isolation regions:
 
-* **Disconnected and Disconnected**. Given two local non-`Sendable` values in
-  separate disconnected isolation regions, if merge their regions, we get one
-  large disconnected region.
+* **Non-Isolated and Non-Isolated**. Given two non-`Sendable` values in separate
+  non-isolated regions, if merge their regions, we get one large non-isolated
+  region.
   
   ```swift
   let x = NonSendable()
   let y = NonSendable()
+  // Regions: [(x), (y)]
   useValue(x, y)
-  // x and y are now in one large disconnected region. So if x is transferred.
+  // Regions: [(x, y)]
   transferToMain(x)
+  // Regions: [{(x, y), @MainActor}]
   // And y is used later, an error is emitted.
   useValue(y)
   ```
 
-* **Disconnected and Actor Isolated**. Merging the regions of a non-`Sendable`
-  value in a disconnected region and a non-`Sendable` value in an actor
-  isolation region actor isolated region results in a new actor isolated
-  region. This forces all values in the previously disconnected region to be
-  treated as if they are isolated to the actor. This can only occur when calling
-  a method on an actor:
+* **Non-Isolated and Actor Isolated**. Merging the non-`Sendable` and actor
+  isolation regions results in a new actor isolated region. This forces all
+  values in non-isolated region to be treated as if they are isolated to the
+  actor. This can only occur when calling a method on an actor:
 
   ```swift
   func example1() async {
     let x = NonSendable()
+    // Regions: [(x)]
     let a = Actor()
     
     // Call into a's isolated state transferring x into a's region.
     await a.useNonSendable(x)
+    // Regions: [{(x), a}]
     
     // Error! x is now within a's region and a's isolation domain. Thus it can no longer
     // be used outside of a's isolation domain.
@@ -839,7 +799,9 @@ our specific kinds of isolation regions:
   ```
   
   and can also occur when passing both an actor and a non-`Sendable` value to
-  the same function: MG: Discussion. The below can never actually transfer x
+  the same function:
+  
+  MG: Discussion. The below can never actually transfer x
   into the a since we can only transfer x into a if we have an async function,
   but x will be a parameter, so we couldn't transfer it further into a in
   useValues since function arguments cannot be transferred. Maybe we make a
@@ -923,7 +885,7 @@ our specific kinds of isolation regions:
   only happen with passing an actor since we cannot transfer non-`Sendable`
   state from the actor's isolation domain. Only can pass the actor itself.
 
-* **Function Argument and Disconnected**. Merging a function argument that only
+* **Function Argument and Non-Isolated**. Merging a function argument that only
   contains non-`Sendable` parameters and disconnected region results in a
   function argument region containing the union of the two regions. Since the
   subsequent region is a function argument region with only non-`Sendable`
