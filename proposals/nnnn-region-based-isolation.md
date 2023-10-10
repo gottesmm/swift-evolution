@@ -200,19 +200,23 @@ conservatively cannot prove it is safe.
 An *isolation region* consists of a set of non-`Sendable` values that may alias
 or be reachable from each other. Each isolation region may be associated with a
 specific *isolation domain* that is associated with the isolation provided by a
-specific actor or a task boundary or be non-isolated and as such not isolated to
-a specific isolation domain.  As the program executes, each isolation region is
-able to expand and merge with other isolation regions as new values begin to be
-alias or be reachable from each other. Each isolation region can only be
-assigned to a single isolation domain at a time since otherwise we would be
-allowing for races to occur since the code in the different isolation domains
-are allowed to execute concurrently. We explore in more detail isolation regions
-in the following section.
+specific actor or a task boundary or be non-isolated to a specific isolation
+domain. As the program executes, each isolation region is able to expand and
+merge with other isolation regions as new values begin to be alias or be
+reachable from each other. Each isolation region can only be assigned to a
+single isolation domain at a time since otherwise we would be allowing for races
+to occur since the code in the different isolation domains are allowed to
+execute concurrently. We explore in more detail isolation regions in the
+following section.
 
 > NOTE: Isolation regions and Isolation domains are not concepts that are
 > explicitly written in source. To help explain the concepts throughout this
 > proposal, the specific isolation regions and isolation domains that values
 > belong to will be notated in comments using bracketed lists. Examples:
+>
+> * `[a]`: A single region that is non-isolated.
+>
+> * `[{a, actorInstance}]`: A single region that is isolated to actorInstance.
 >
 > * `[a, {b, actorInstance}]`: Two values in separate isolation regions. a's
 >   region is non-isolated but b's region is assigned to the isolation domain of
