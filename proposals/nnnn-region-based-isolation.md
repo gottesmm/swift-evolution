@@ -773,22 +773,22 @@ our specific kinds of isolation regions:
   ```swift
   func example1() async {
     let x = NonSendable()
-    // Regions: [(x)]
+    // Regions: [(x), {(a.field), a}]
     let a = Actor()
     
     // Call into a's isolated state transferring x into a's region.
     await a.useNonSendable(x)
-    // Regions: [{(x), a}]
+    // Regions: [{(x, a.field), a}]
     
     // Error! x is now within a's region and a's isolation domain. Thus it can no longer
     // be used outside of a's isolation domain.
     useValue(x)
 
     let y = NonSendable()
-    // Regions: [{(x), a}, (y)]
+    // Regions: [{(x, a.field), a}, (y)]
     
     a.field = y
-    // Regions: [{(x, y), a}]
+    // Regions: [{(x, a.field, y), a}]
 
     // Error! Cannot use value outside of a's isolation domain.
     useValue(y)
