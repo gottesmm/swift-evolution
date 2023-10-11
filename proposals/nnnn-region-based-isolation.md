@@ -369,24 +369,25 @@ Now lets apply these rules to some specific examples:
 * **Assigning a var binding**. ``y = x``. Assigning a var binding `y` with `x`
   results in `y` being in the same region as `x`. If `y` is not captured by
   reference in a closure, then `y`'s previous assigned region is forgotten due
-  to `(3)(i)`:
+  to `(3)(ii)`:
   
   ```swift
   func mutableBindingAssignmentSimple() {
     var x = NonSendable()
     // Regions: [(x)]
-    let closure = { print(x) }
-    // Regions: [(x, closure)]
     let y = NonSendable()
-    // Regions: [(x, closure), y]
+    // Regions: [(x), (y)]
     x = y
-    // Regions: [closure, (x, y)]
+    // Regions: [(x, y)]
+    let z = NonSendable()
+    // Regions: [(x, y), (z)]
+    x = z
+    // Regions: [(y), (x, z)]
   }
   ```
   
-  In contrast if `y` was captured by a closure, then `y`'s former region is
-  merged with the region of `x` due to `(3)(ii)`. This can happen by either
-  capturing the var and passing it inout to a function:
+  In contrast if `y` was captured in a closure by reference, then `y`'s former
+  region is merged with the region of `x` due to `(3)(i)`.
   
   ```swift
   // Since we pass x as inout in the closure, the closure has to capture x by
@@ -400,25 +401,6 @@ Now lets apply these rules to some specific examples:
     // Regions: [(x, closure), y]
     x = y
     // Regions: [(x, closure, y)]
-  }
-  ```
-  
-  or by escaping the capturing closure in a manner that ensures that the closure
-  lives outside of the lifetime of the current function invocation for example
-  by being returned from the function:
-
-  ```swift
-  // Since we return the closure, we capture x by reference.
-  func mutableBindingAssignmentClosureReturn() -> (() -> ()) {
-    var x = NonSendable()
-    // Regions: [(x)]
-    let closure = { print(x) }
-    // Regions: [(x, closure)]
-    let y = NonSendable()
-    // Regions: [(x, closure), y]
-    x = y
-    // Regions: [(x, closure, y)]
-    return closure
   }
   ```
 
@@ -453,14 +435,11 @@ Now lets apply these rules to some specific examples:
   }
   ```
 
-* **Capturing non-`Sendable` values in a closure**. ``closure = { useX(x);
-  useY(y) }``. Capturing non-`Sendable` values `x` and `y` results in `x` and
-  `y` being in the same region. This can be viewed as a consequence of `(2)`
-  since `x` and `y` are formally arguments to the closure formation. This also
-  means that the closure must be part of that same region. If the closure
-  captures the value by reference due to the conditions mentioned above, then
-  when we assign over the captured variable, we do not forget the previous
-  region (see "assigning var" above for examples):
+* **Capturing non-`Sendable` values by reference in a closure**. ``closure = {
+  useX(x); useY(y) }``. Capturing non-`Sendable` values `x` and `y` results in
+  `x` and `y` being in the same region. This can be viewed as a consequence of
+  `(2)` since `x` and `y` are formally arguments to the closure formation. This
+  also means that the closure must be part of that same region:
   
   ```swift
   func captureInClosure() {
