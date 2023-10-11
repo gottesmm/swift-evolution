@@ -575,9 +575,9 @@ below.
 
 ### Taxonomy of Isolation Regions
 
-There are three types of isolation regions that a non-`Sendable` value can
-belong to that determine the rules for transferring value over an isolation
-boundary. We discuss them below.
+There are two types of isolation regions that a non-`Sendable` value can belong
+to that determine the rules for transferring value over an isolation
+boundary.
 
 #### Disconnected Isolation Regions
 
@@ -650,15 +650,15 @@ The objects that make up an actor region varies depending on the kind of actor:
     func method() async {
       // x is part of self's region since listHead is part of self's region.
       let x = self.listHead
-      // Regions: [{(x), self}]
+      // Regions: [{(x, self.listHead, self.listHead.next, ...), self}]
       
       // Since the assignment flows transitively, also y via x is part of self's region.
       let y = x
-      // Regions: [{(x, y), self}]
+      // Regions: [{(x, y, self.listHead, self.listHead.next, ...), self}]
       
       // z is part of self's region since transitively next must also be part of self's region.
       let z = self.listHead.next!
-      // Regions: [{(x, y, z), self}]
+      // Regions: [{(x, y, z, self.listHead, self.listHead.next, ...), self}]
       ...
     }
   }
