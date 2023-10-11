@@ -310,7 +310,7 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    
    ```swift
    // Rule 3ii. If a var is assigned a new value and was not previously
-   // captured then y takes on the region of its new value
+   // captured by reference then y takes on the region of its new value
    // and the old region is forgotten.
    func rule3ii() async {
      let x1 = NonSendable()
