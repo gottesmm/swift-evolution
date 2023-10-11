@@ -278,69 +278,63 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    }
    ```
 
-3. If `y` is mutable binding (e.x.: `var`) and:
-   1. is not passed by reference into a closure then `y`'s previous region is not merged into `y`'s
-      new region when y is assigned a new value.
-      
-      ```swift
-      // Rule 3i. If a var is assigned a new value and was not previously
-      // captured and passed inout then y takes on the region of its new value
-      // and the old region is forgotten.
-      func rule3i() async {
-        let x1 = NonSendable()
-        let x2 = NonSendable()
-        let x3 = NonSendable()
-        var y = x3
-        
-        let closure = {
-          print(y)
-        }
-        
-        // At this point, y and closure are in the same region.
-        // Regions: [x1, x2, (x3, y, closure)]
-        y = await transferToGlobal(x1, x2)
-        
-        // After evaluating transferToGlobal, y and closure are now in different
-        // regions.
-        // Regions: [(x1, x2, y), (x3, closure)]
-      }
-      ```
-      
-   2. previously captured by reference in the current function, then we merge
-      the region associated with `y`'s previous value with the resulting region of
-      the assignment.
-      
-      ```swift
-      // Rule 3ii. If a var is assigned a new value and was previously
-      // captured and passed inout then y's new region is merged with y's old region.
-      func rule3ii() async {
-        let x1 = NonSendable()
-        let x2 = NonSendable()
-        let x3 = NonSendable()
-        var y = x3
-        
-        let closure = {
-          useInOut(&y)
-        }
-        
-        // At this point, closure and y are in the same region.
-        // Regions: [x1, x2, (x3, y, closure)]
-        y = await transferToGlobal(x1, x2)
-        
-        // After evaluating transferToGlobal, closure and y are still in the same region since
-        // if we invoked closure later, we would access y's memory.
-        // Regions: [(x1, x2, x3, y, closure)]
-      }
-      ```
+3. If `y` is mutable binding (e.x.: `var`) and `y` was previously captured by
+   reference in a closure, then when we assign into `y`, we merge `y`'s new
+   region into its old region:
+   
+   ```swift
+   // Rule 3i. If a var is assigned a new value and was previously
+   // captured by reference then y's new region is merged with y's old region.
+   func rule3i() async {
+     let x1 = NonSendable()
+     let x2 = NonSendable()
+     let x3 = NonSendable()
+     var y = x3
+     
+     let closure = {
+       useInOut(&y)
+     }
+     
+     // At this point, closure and y are in the same region.
+     // Regions: [x1, x2, (x3, y, closure)]
+     y = await transferToGlobal(x1, x2)
+     
+     // After evaluating transferToGlobal, closure and y are still in the same region since
+     // if we invoked closure later, we would access y's memory.
+     // Regions: [(x1, x2, x3, y, closure)]
+   }
+   ```
+   
+   In contrast, if `y` was not captured by reference, then `y`'s old region is
+   forgotten:
+   
+   ```swift
+   // Rule 3ii. If a var is assigned a new value and was not previously
+   // captured then y takes on the region of its new value
+   // and the old region is forgotten.
+   func rule3ii() async {
+     let x1 = NonSendable()
+     let x2 = NonSendable()
+     let x3 = NonSendable()
+     var y = x3
+     
+     // At this point, y and x3 are in the same region.
+     // Regions: [x1, x2, (x3, y)]
+     y = await transferToGlobal(x1, x2)
+     
+     // After evaluating transferToGlobal, y and x3 are now in different
+     // regions.
+     // Regions: [(x1, x2, y), (x3)]
+   }
+   ```
 
 These rules follow from our need to conservatively analyze regions since without
 any further type information:
 
 * Any of the `xi` inside of `f` could become reachable from each other.
 * `y` could be one of the `xi` or alias contents of the `xi`.
-* If `y` previously was captured and passed inout then the new value stored into
-`y` could be referenced via calling the closure since the inout will cause
-`y` to be left as a box reference.
+* If `y` was captured by reference in a closure and then assigned a new value,
+  calling the closure could reference `y`'s new value.
 
 By using additional type information, we can make this less conservative (see
 extensions), but as a general set of rules, these guide us.
