@@ -189,7 +189,7 @@ conservatively cannot prove it is safe.
 
 ### Isolation Regions
 
-#### Basic Definitions
+#### Definitions
 
 An *isolation region* is a set of non-`Sendable` values that must be isolated
 together. Values must be isolated together when they may alias or be reachable
@@ -197,22 +197,16 @@ from each other. An isolation region can be either associated with a specific
 *isolation domain* protected by an actor instance or a global actor, or it can
 be disconnected from any isolation domain. Disconnected isolation regions
 cannot be accessed concurrently, but they can be safely passed across isolation
-boundaries.
-
-As the program executes, each isolation region can be merged with other
+boundaries. As the program executes, each isolation region can be merged with other
 isolation regions as new values begin to be alias or be reachable from each
-other. Each isolation region can only be assigned to a
-single isolation domain at a time since otherwise we would be allowing for races
-to occur since the code in the different isolation domains are allowed to
-execute concurrently. We explore in more detail isolation regions in the
-following section.
+other.
 
-> NOTE: Isolation regions and Isolation domains are not concepts that are
-> explicitly written in source. To help explain the concepts throughout this
-> proposal, the specific isolation regions and isolation domains that values
-> belong to will be notated in comments using bracketed lists. Examples:
->
-> * `[a]`: A single region that is disconnected.
+Isolation regions and isolation domains are not concepts that are explicitly
+denoted in source code. To help explain the concepts throughout this proposal,
+isolation regions and their isolation domains will be written in comments in
+the following notation:
+
+> * `[a]`: A single disconnected region with a single value.
 >
 > * `[{a, actorInstance}]`: A single region that is isolated to actorInstance.
 >
@@ -221,135 +215,57 @@ following section.
 >   the actor instance actorInstance.
 >
 > * `[{(x, y), @OtherActor}, z, (w, t)]`: Five values in three separate
->   isolation domains. x and y are within one isolation region that is isolated
->   to the isolation domain associated with @OtherActor. z is within its own
->   isolation region and is disconnected. w and t are within the same region and
->   similar to z are disconnected.
+>   isolation regions. `x` and `y` are within one isolation region that is
+>   isolated to the global actor `@OtherActor`. `z` is within its own
+>   disconnected isolation region. `w` and `t` are within the same disconnected
+>   region.
 
-#### Basic Rules
+#### Rules for Merging Isolation Regions
 
-The formal definition of an isolation region phrased in terms of reachability
-and aliasing works well in the abstract but can be hard to apply in
-practice. Instead, we suggest that users think about code constructs such as
-function calls, property accesses, and assignment as a form of abstract function
-application and then apply the following rules of thumb:
+Isolation regions are merged together when the program introduces a potential
+alias or access path to another value. This can happen through function calls,
+and assignments. Many expression forms are sugar for a function application,
+including property accesses.
 
-Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub>):
+Given a function $f$, applied to arguments $a_{i}$, whose result is assigned to
+variable $y$:
 
-1. All non-`Sendable` arg<sub>i</sub>'s regions are merged into one larger
-   region after f executes:
-   
-   ```swift
-   // Rule 1. Passing non-Sendable values to non-transferring functions merge their regions.
-   func rule1() async {
-     let x1 = NonSendable()
-     let x2 = NonSendable()
-     // x1, x2 are disconnected but in different regions
-     // Regions: [x1, x2]
-     let _  = await asyncFunction(x1, x2)
-     // x1, x2 are in the same region and still disconnected
-     // Regions: [(x1, x2)]
+$$
+y = f(a_{0}, ..., a_{n})
+$$
 
-     // The same follows if we create an x3 and call a synchronous function.
-     let x3 = NonSendable()
-     // Regions: [(x1, x2), x3]
-     let _ = synchronousFunction(x2, x3)
-     // Regions: [(x1, x2, x3)]
-   }
-   ```
+1. All regions of non-`Sendable` arguments $a_{i}$ are merged into one larger
+   region after $f$ executes.
+2. If any of $a_{i}$ are non-`Sendable` and $y$ is non-`Sendable`, then $y$ is in
+   the same merged region as $a_{i}$. If all of the $a_{i}$ are `Sendable`,
+   then $y$ is within a new disconnected region that consists only of $y$.
+3. If $y$ is not a new variable, i.e. it's mutable, then
 
-2. If any of arg<sub>i</sub> are non-`Sendable` and y is non-`Sendable`, then y is in
-   the same merged region as the arg<sub>i</sub>. If all of the arg<sub>i</sub> are `Sendable`, then
-   y is within a new region that consists only of y.
-   
-   ```swift
-   // Rule 2. Results of an synchronous or async non-transferring function take on
-   // the merged region of their arguments. If no arguments, gets a fresh region.
-   func rule2() async {
-     let x1 = NonSendable()
-     let x2 = NonSendable()
-     // Regions: [x1, x2]
-     let y = await callNonIsolatedFunction(x1, x2)
-     // Regions: [(x1, x2, y)]
-   
-     // Since no arguments are passed to callOtherNonIsolatedFunction, z is in its own region.
-     let z: NonSendable = callOtherNonIsolatedFunction()
-     // Regions: [(x1, x2, y) , z]
-   }
-   ```
+   a) If $y$ was previously captured by reference in a closure, then the assignment
+      to $y$ merges $y$'s new region into its old region.
 
-3. If `y` is mutable binding (e.x.: `var`) and `y` was previously captured by
-   reference in a closure, then when we assign into `y`, we merge `y`'s new
-   region into its old region:
-   
-   ```swift
-   // Rule 3i. If a var is assigned a new value and was previously
-   // captured by reference then y's new region is merged with y's old region.
-   func rule3i() async {
-     let x1 = NonSendable()
-     let x2 = NonSendable()
-     let x3 = NonSendable()
-     var y = x3
-     
-     let closure = {
-       useInOut(&y)
-     }
-     
-     // At this point, closure and y are in the same region.
-     // Regions: [x1, x2, (x3, y, closure)]
-     y = await transferToGlobal(x1, x2)
-     
-     // After evaluating transferToGlobal, closure and y are still in the same region since
-     // if we invoked closure later, we would access y's memory.
-     // Regions: [(x1, x2, x3, y, closure)]
-   }
-   ```
-   
-   In contrast, if `y` was not captured by reference, then `y`'s old region is
-   forgotten:
-   
-   ```swift
-   // Rule 3ii. If a var is assigned a new value and was not previously
-   // captured by reference then y takes on the region of its new value
-   // and the old region is forgotten.
-   func rule3ii() async {
-     let x1 = NonSendable()
-     let x2 = NonSendable()
-     let x3 = NonSendable()
-     var y = x3
-     
-     // At this point, y and x3 are in the same region.
-     // Regions: [x1, x2, (x3, y)]
-     y = await transferToGlobal(x1, x2)
-     
-     // After evaluating transferToGlobal, y and x3 are now in different
-     // regions.
-     // Regions: [(x1, x2, y), (x3)]
-   }
-   ```
+   b) If $y$ was not captured by reference, then $y$'s old region is
+      forgotten.
 
-These rules follow from our need to conservatively analyze regions since without
-any further type information:
+The above rules are conservative; without any further annotations, we must assume:
+* In the implementation of $f$, any $a_{i}$ could become reachable from $a_{j}$.
+* $y$ could be one of the $a_{i}$ values or alias contents of $a_{i}$.
+* If $y$ was captured by reference in a closure and then assigned a new value,
+  calling the closure could reference $y$'s new value.
 
-* Any of the `xi` inside of `f` could become reachable from each other.
-* `y` could be one of the `xi` or alias contents of the `xi`.
-* If `y` was captured by reference in a closure and then assigned a new value,
-  calling the closure could reference `y`'s new value.
+See the future directions section for additional annotations that enable more
+precise regions.
 
-By using additional type information, we can make this less conservative (see
-extensions), but as a general set of rules, these guide us.
+##### Examples
 
-#### Rules in practice
-
-Now lets apply these rules to some specific examples:
+Now lets apply these rules to some specific examples in Swift code:
 
 * **Initializing a let or var binding**. ``let y = x, var y = x``. Initializing
   a let or var binding `y` with `x` results in `y` being in the same region as
   `x`. This follows from `(2)` since formally a copy is equivalent to calling a
-  property on `x` that takes `x` as self and returns a copy of `x`. Performing a
-  `consume` of `x` would analogously via `(2)` also result in `y` being in the
-  same region as `x`:
-  
+  function that accepts `x` and returns a copy of `x`. Performing a `consume`
+  of `x` also results in `y` being in the same region as `x`:
+
   ```swift
   func bindingInitialization() {
     let x = NonSendable()
@@ -360,17 +276,16 @@ Now lets apply these rules to some specific examples:
     // Regions: [(x, y, z)]
   }
   ```
-  
-  The reason why `consume` does not cause `x` to no longer be in the region is
-  that the consume rule is applied /after/ regions have been evaluated. This
-  does not affect the output of region analysis, since a valid program must
-  still obey the no-reuse constraints of consume.
+
+  Note that whether or not `x` is in the region after `consume x` does not
+  change program semantics. A valid program must still obey the no-reuse
+  constraints of `consume`.
 
 * **Assigning a var binding**. ``y = x``. Assigning a var binding `y` with `x`
   results in `y` being in the same region as `x`. If `y` is not captured by
   reference in a closure, then `y`'s previous assigned region is forgotten due
-  to `(3)(ii)`:
-  
+  to `(3)(b)`:
+
   ```swift
   func mutableBindingAssignmentSimple() {
     var x = NonSendable()
@@ -385,10 +300,10 @@ Now lets apply these rules to some specific examples:
     // Regions: [(y), (x, z)]
   }
   ```
-  
+
   In contrast if `y` was captured in a closure by reference, then `y`'s former
-  region is merged with the region of `x` due to `(3)(i)`.
-  
+  region is merged with the region of `x` due to `(3)(a)`.
+
   ```swift
   // Since we pass x as inout in the closure, the closure has to capture x by
   // reference.
@@ -404,13 +319,13 @@ Now lets apply these rules to some specific examples:
   }
   ```
 
-* **Reading a field of a non-Sendable value**. ``let y = x.f``. Accessing a
-  field `f` on a non-`Sendable` value `x` results in a value `y` that must be in
-  the same region as `x`. This follows from `(2)` since formally a property
-  access is equivalent to calling a getter passing `x` as `self`. Importantly
-  this property forces all non-`Sendable` data structures to form one large
-  region:
-  
+* **Accessing a non-`Sendable` property of a non-`Sendable` value**.
+  ``let y = x.f``. Accessing a property `f` on a non-`Sendable` value `x`
+  results in a value `y` that must be in the same region as `x`. This follows
+  from `(2)` since formally a property access is equivalent to calling a getter
+  passing `x` as `self`. Importantly, this property forces all non-`Sendable`
+  types to form one large region containing their non-`Sendable` state:
+
   ```swift
   func assignFieldToValue() {
     let x = NonSendableStruct()
@@ -420,10 +335,10 @@ Now lets apply these rules to some specific examples:
   }
   ```
 
-* **Setting a non-`Sendable` field of a non-`Sendable` value**. ``y.f =
-  x``. Assigning `x` into a field `y.f` results in `y` and `y.f` being in the
+* **Setting a non-`Sendable` property of a non-`Sendable` value**. ``y.f = x``
+  Assigning `x` into a property `y.f` results in `y` and `y.f` being in the
   same region as `x`. This again follows from `(2)`:
-  
+
   ```swift
   func assignValueToField() {
     let x = NonSendableStruct()
@@ -437,10 +352,10 @@ Now lets apply these rules to some specific examples:
 
 * **Capturing non-`Sendable` values by reference in a closure**. ``closure = {
   useX(x); useY(y) }``. Capturing non-`Sendable` values `x` and `y` results in
-  `x` and `y` being in the same region. This can be viewed as a consequence of
-  `(2)` since `x` and `y` are formally arguments to the closure formation. This
+  `x` and `y` being in the same region. This is a consequence of `(2)` since
+  `x` and `y` are formally arguments to the closure formation. This
   also means that the closure must be part of that same region:
-  
+
   ```swift
   func captureInClosure() {
     let x = NonSendable()
@@ -455,7 +370,7 @@ Now lets apply these rules to some specific examples:
   `transfer`, `x` and `y` are considered to be within the same region. Since
   `self` is a function argument to methods, this implies that when `self` is
   non-`Sendable` all method arguments must be in the same region as `self`:
-  
+
   ```swift
   func transfer(x: NonSendable, y: NonSendable) {
     // Regions: [(x, y)]
@@ -468,31 +383,34 @@ Now lets apply these rules to some specific examples:
 
 #### Control Flow
 
-The above rules show how isolation regions change at specific program points,
-but do not explain how isolation regions are affected by control flow. Given two
-non-`Sendable` values `x` and `y` in a control flow block, we say that `x`
-and `y` are in the same region in the control flow block if in any of the
-control flow block's predecessor blocks they are in the same region. For
-instance:
+Isolation regions are also affected by control flow. Let $x$ and $y$
+be two values that are used in a control flow statement. After the
+control flow statement, the regions of $x$ and $y$ are merged if any
+of the blocks within the statement merge the regions of $x$ and $y$.
+For example:
 
 ```swift
-// x and y are in different regions
+// Regions: [(x), (y)]
 var x: NonSendable? = NonSendable()
 var y: NonSendable? = NonSendable()
 if ... {
-  // x and y are now in the same region
+  // Regions: [(x), (y)]
   x = y
+  // Regions: [(x, y)]
 } else {
-  // x and y are still in different regions
+  // Regions: [(x), (y)]
 }
 
-// Since along the if statement x and y are in the same region,
-// they are in the same region here.
+// Regions: [(x, y)]
 ```
 
-This rule is conservative and safe since it is always ok to consider two values
-that are isolated from each other as if they are not isolated. The only effect
-would be the rejection of programs that we otherwise could accept.
+Because the first block of the `if` statement assigns `x` to `y`, causing
+their regions to be merged within that block, `x` and `y` are in the
+same region after the `if` statement.
+
+This rule is conservative since it is always safe to consider two values
+that are disconnected from each other as if they are isolated together. The
+only effect would be the rejection of programs that we otherwise could accept.
 
 The above description of regions naturally allows the definition of an
 optimistic forward dataflow problem that allows us to determine at every point
@@ -642,19 +560,19 @@ The objects that make up an actor region varies depending on the kind of actor:
   class NonSendableLinkedList {
     var next: NonSendableLinkedList?
   }
-  
+
   actor Actor {
     var listHead: NonSendableLinkedList
-  
+
     func method() async {
       // x is part of self's region since listHead is part of self's region.
       let x = self.listHead
       // Regions: [{(x, self.listHead, self.listHead.next, ...), self}]
-      
+
       // Since the assignment flows transitively, also y via x is part of self's region.
       let y = x
       // Regions: [{(x, y, self.listHead, self.listHead.next, ...), self}]
-      
+
       // z is part of self's region since transitively next must also be part of self's region.
       let z = self.listHead.next!
       // Regions: [{(x, y, z, self.listHead, self.listHead.next, ...), self}]
@@ -671,7 +589,7 @@ The objects that make up an actor region varies depending on the kind of actor:
   ```swift
   @GlobalActor var firstList: NonSendableLinkedList
   @GlobalActor var secondList: NonSendableLinkedList
-  
+
   @GlobalActor func useGlobalActor() async {
     // Regions: [{(firstList, secondList), @GlobalActor}]
 
@@ -701,7 +619,7 @@ our specific kinds of isolation regions:
 * **Disconnected and Disconnected**. Given two non-`Sendable` values in separate
   disconnected regions, if merge their regions, we get one large disconnected
   region.
-  
+
   ```swift
   let x = NonSendable()
   let y = NonSendable()
@@ -725,18 +643,18 @@ our specific kinds of isolation regions:
     let x = NonSendable()
     // Regions: [(x), {(a.field), a}]
     let a = Actor()
-    
+
     // Call into a's isolated state transferring x into a's region.
     await a.useNonSendable(x)
     // Regions: [{(x, a.field), a}]
-    
+
     // Error! x is now within a's region and a's isolation domain. Thus it can no longer
     // be used outside of a's isolation domain.
     useValue(x)
 
     let y = NonSendable()
     // Regions: [{(x, a.field), a}, (y)]
-    
+
     a.field = y
     // Regions: [{(x, a.field, y), a}]
 
@@ -753,14 +671,14 @@ our specific kinds of isolation regions:
   example below, if one attempts to use conditional control flow to create a
   region isolated to two different actors, we would still get a value that could
   never be used:
-  
+
   ```swift
   func test() async {
     let a1 = Actor()
     let a2 = Actor()
     let x = NonSendable()
     // Regions: [(x)]
-    
+
     if await boolean {
       await a1.useNS(x)
       // Regions: [{(x), a1}]
@@ -793,7 +711,7 @@ func nonIsolatedCallee(_ x: NonSendable) async { ... }
 
 func nonIsolatedCaller() async {
   let x = NonSendable()
-  
+
   // No transfer occurs since callee is also nonisolated.
   await nonIsolatedCallee(x)
 
@@ -1021,7 +939,7 @@ extension Actor {
     // ... so this is safe as well.
     await transferClosure(closure)
   }
-}  
+}
 ```
 
 ### Simplifying `nonisolated` initializers and deinitializers via transferring
@@ -1097,7 +1015,7 @@ the usage of the `transferring` self, this property can be applied to general
 `nonisolated` methods. See extensions for more information.
 
 // TODO: Why not just have deinit be isolated to actor and prevent
-// transferring. Then doesn't need to be `nonisolated`. 
+// transferring. Then doesn't need to be `nonisolated`.
 
 ### Using transferring to pass non-Sendable values to async isolated actor initializers
 
@@ -1149,7 +1067,7 @@ This in practice means that:
 * In the callee, we would treat the transferred parameter as being within its
   own region rather than as part of the same region. This means that we could
   transfer the parameter onto further isolation domains if it is non-`Sendable`:
-  
+
   ```swift
   @MainActor func transferToMainActor<T>(_ t: T) async {}
 
@@ -1164,17 +1082,17 @@ This in practice means that:
 * Even if the caller knows that the callee is within the same isolation domain,
   the caller would not be able to use the transferred non-`Sendable` value again
   locally.
-  
+
   ```swift
   actor Actor {
     func transfer<T>(_ t: transferring T) async {}
     func method() async {
       let a = NonSendable()
-      
+
       // Pass a into transfer. Even though we are in the same
       // isolation domain as transfer...
       await transfer(a)
-      
+
       // Since we transferred a, we are no longer allowed to use a here. Error!
       useValue(a)
     }
@@ -1211,7 +1129,7 @@ region as the actor.
 #### Disconnected Actor Fields
 
 Currently actor fields are always considered to be part of an Actor's region. In
-certain cases, we would like to be able to 
+certain cases, we would like to be able to
 
 <!--
 ### <a name="transferringargs"></a>Transferring args
@@ -1225,10 +1143,10 @@ func passToActorTransferring(a : MyActor, transferring v : NonSendableValue) asy
 
 func genAndPassTransferring(a : MyActor) async {
   let v = NonSendableValue()
-  
+
   // call transfers v
   await passToActorTransferring(a, v)
-  
+
   // access here NOT allowed
   print(v)
 }
@@ -1258,14 +1176,14 @@ Another way that function signatures could be made more expressive is through th
 func generateFreshPerson(_ name : String, _ age : Int, _ ancestryMap : AncestryMap) -> Person {
   let person = Person(name, age)
   if (ancestryMap.containsChild(person)) { ... /* do some logic */ }
-  
+
   return person
 }
 ```
 
 This code basically wraps an initializer with extra logic, and aims to return a non-sendable result to the caller in a fresh region. Unfortunately, the current `SendNonSendable` pass does not allow its result to be used. A useful extension would allow functions with non-sendable results to allow those results to be accessible to cross-isolation callers in the following cases:
 
-- For methods that are not actor methods, the result of isolation-crossing calls to those methods are always available to the caller. 
+- For methods that are not actor methods, the result of isolation-crossing calls to those methods are always available to the caller.
   - By default, results are provided in the same region as `self` and any other arguments (except `transferring` arguments, [see above](#transferringargs))
   - If the `fresh` keyword is placed on the result type in the function signature (e.g. `func generateFreshPerson(...) -> fresh Person`), then the result is provided in a fresh region
 - For actor methods:
@@ -1291,7 +1209,7 @@ actor IndecisiveBox {
     contents = val
     return oldContents
   }
-  
+
   func swapWithOtherBox(_ otherBox : IndecisiveBox) async {
     let otherContents = await otherBox.replaceContents(contents) // warning: call site passes `self` or a non-sendable argument of this function to another thread, potentially yielding a race with the caller
     contents = otherContents
@@ -1299,7 +1217,7 @@ actor IndecisiveBox {
 }
 ```
 
-This could be a perfectly safe pattern, but in the current `SendNonSendable` pass will produce diagnostics as shown above. The issue is that it is not statically known that it is safe to send `contents` to another thread while continuing to access the rest of the actor's storage. To this end, the system could introduce the `iso` keyword. 
+This could be a perfectly safe pattern, but in the current `SendNonSendable` pass will produce diagnostics as shown above. The issue is that it is not statically known that it is safe to send `contents` to another thread while continuing to access the rest of the actor's storage. To this end, the system could introduce the `iso` keyword.
 
 The `iso` keyword, when placed on fields, for example as `iso var contents : NonSendable` above, would indicate that instead of tracking the source and target of the reference (here, `self` and `self.contents`) as necessarily belonging to the same region, they could belong to *different* regions. This allows the above code to typecheck, but comes at the cost of greater complexity to the analysis. For more details see (the PLDI paper)[https://www.cs.cornell.edu/andru/papers/gallifrey-types/].
 
@@ -1320,7 +1238,7 @@ Current `Sendable` checking allows for the following declaration:
 extension T: Sendable { }
 ```
 
-This ensures that `T` will never be `Sendable`, and allows API designers to express a constraint that values of type `T` should never become available in any isolation domain except the one they were created in. With the introduction of the `SendNonSendable` pass, declaring the `Sendable` protocol `unavailable` for a type will still have the effect of preventing it from being made to confom to `Sendable`, and thus preventing values of that type from being sent without using the `SendNonSendable` pass to ensure no aliases of the value linger, but it will not have the effect of ouright preventing values from being sent. 
+This ensures that `T` will never be `Sendable`, and allows API designers to express a constraint that values of type `T` should never become available in any isolation domain except the one they were created in. With the introduction of the `SendNonSendable` pass, declaring the `Sendable` protocol `unavailable` for a type will still have the effect of preventing it from being made to confom to `Sendable`, and thus preventing values of that type from being sent without using the `SendNonSendable` pass to ensure no aliases of the value linger, but it will not have the effect of ouright preventing values from being sent.
 
 It could potentially be useful to still expose a way for developers to ensure values of their defined types are never able to be sent, which would involve a new annotation or protocol such as `~Transferrable` or `~Sendable`. Values of such types would still need to be tracked, as their region labels are necessary to ensure closure under aliasing and references still holds for the regions of non-annotated values, but at the point of a send between isolations, attempting to send any `~Transferable` type would always yield a diagnostic.
 
@@ -1413,10 +1331,10 @@ From a concurrency perspective, region's provide a powerful manner to determine 
 Given a region `r` at a program point `p`, we know that if any element of `r` is
 transferred from one isolation domain to another at `p`:
 
-1. `r` must contain all local values that 
+1. `r` must contain all local values that
 1. We must conservatively assume that /all/ other elements of `r` must also be
 transferred to the other isolation domain as well.
-2. The region contains all values that could have been transferred 
+2. The region contains all values that could have been transferred
 
 Since we know that two non-`Sendable` values `v1` and `v2` that are in the same
 region may alias or be reachable from each other, we must assume that if we
@@ -1516,18 +1434,18 @@ blocks. For instance in the following code:
 ### NonSendable Reachable Value Sets
 
 
-### Reachable Value 
+### Reachable Value
 
 Given a copyable value `v`, new values are added to `v`'s reachable value set
 via the following rules:
 
-* `let x = v`. Creating a new binding `x` for `v`. Since Swift copies are 
+* `let x = v`. Creating a new binding `x` for `v`. Since Swift copies are
 
 
 
 1. Conservatively grouping all non-`Sendable` values in the function into
    "reachable sets". A "reachable set" consists of values that may alias and
-   as well as any values 
+   as well as any values
 
 1. Analyzing all uses in the function where the isolation domain crossing
    occurs.
@@ -1539,7 +1457,7 @@ a value in the function where the isolation crossing occurs and determining in a
 conservative manner if any values that may alias the non-`Sendable` is used
 later in the same function.
 
-It does this by 
+It does this by
 
 To a human programmer, the function `computeAndDisplayData` is clearly safe. Swift concurrency prevents `neighbors` from being sent across isolation domains to the main actor because of the potential for the main actor to race with the remainder of `computeAndDisplayData` over access to `neighbors`. But `computeAndDisplayData` doesn't access `neighbors` again after the call, and doesn't allow it to escape. What is needed is a pass that can tell the difference between safe functions like:
 
@@ -1580,7 +1498,7 @@ This motivates the development of the `SendNonSendable` pass, currently availabl
 
 ### Regions
 
-The above unsafe examples are clearly racy because a single value, `neighbors`, is sent across isolations then accessed or escaped. There are also examples in which races could arise where it's slightly less obvious that accessing the sent value could race with accessing the kept value. 
+The above unsafe examples are clearly racy because a single value, `neighbors`, is sent across isolations then accessed or escaped. There are also examples in which races could arise where it's slightly less obvious that accessing the sent value could race with accessing the kept value.
 
 ```swift
 func computeAndDisplayLargest(datasets : [LocationData]) async {
@@ -1588,21 +1506,21 @@ func computeAndDisplayLargest(datasets : [LocationData]) async {
   for data in datasets {
     listOfGraphs.append(computeNearestNeighbors(data : data))
   }
-  
+
   let largestGraph = listOfGraphs.max(by: { $0.numRootPoints() > $1.numRootPoints() })
   let smallestGraph = listOfGraphs.min(by: { $0.numRootPoints() > $1.numRootPoints() })
-  
+
   await addToDisplay(largestGraph)
-  
+
   smallestGraph.decreaseClusterSize(1)
 }
 ```
 
-In this function, `Largest` attempts to display the largest `NearestNeighbor` graph generated from a list of datasets passed to the function. No single value appears to be both sent across isolations and subsequently accessed. However, there is no guarantee that `largestGraph` and `smallestGraph` are distinct values - they could be the same value! So the access and mutation of `smallestGraph` via `smallestGraph.decreaseClusterSize(1)` could race with the access to `largestGraph` granted to the main actor via `await addToDisplay(largestGraph)`. 
+In this function, `Largest` attempts to display the largest `NearestNeighbor` graph generated from a list of datasets passed to the function. No single value appears to be both sent across isolations and subsequently accessed. However, there is no guarantee that `largestGraph` and `smallestGraph` are distinct values - they could be the same value! So the access and mutation of `smallestGraph` via `smallestGraph.decreaseClusterSize(1)` could race with the access to `largestGraph` granted to the main actor via `await addToDisplay(largestGraph)`.
 
-Strict linearity would solve this by preventing aliasing to ever arise in the first place by banning obvious aliasing (e.g. `let x = y`), and as a result preventing implementations of functions like `min` and `max` that provide first class references to objects still present elsewhere in a datastructure. In short - strict linearity enforces "one first class reference at a time" semantics. This is an unnatural programming model, and in addition to outright preventing certain APIs from being implemented it is awkward and cumbersome to work with (try googling "how to write a doubly linked list in Rust"). 
+Strict linearity would solve this by preventing aliasing to ever arise in the first place by banning obvious aliasing (e.g. `let x = y`), and as a result preventing implementations of functions like `min` and `max` that provide first class references to objects still present elsewhere in a datastructure. In short - strict linearity enforces "one first class reference at a time" semantics. This is an unnatural programming model, and in addition to outright preventing certain APIs from being implemented it is awkward and cumbersome to work with (try googling "how to write a doubly linked list in Rust").
 
-The solution that the `SendNonSendable` pass chose to implement in place of strict, value-level linearity, is *linear regions*. Regions are collections of values that could alias or reference each other, split up so that two values in separate regions *cannot* ever alias or reference each other. Operations such as cross-isolation method calls that would transfer ownership of values instead transfer ownership of *entire regions* at a time - allowing aliasing to arise but preventing it from leading to races. For example, in the above `computeAndDisplayLargest` function, the values `listOfGraphs`, `largestGraph`, and `smallestGraph` would all be considered in the same region - allowing the `SendNonSendable` code to realize that the access  `smallestGraph.decreaseClusterSize(1)` is potentially racy because `smallestGraph`'s region was already transferred to a different isolation. 
+The solution that the `SendNonSendable` pass chose to implement in place of strict, value-level linearity, is *linear regions*. Regions are collections of values that could alias or reference each other, split up so that two values in separate regions *cannot* ever alias or reference each other. Operations such as cross-isolation method calls that would transfer ownership of values instead transfer ownership of *entire regions* at a time - allowing aliasing to arise but preventing it from leading to races. For example, in the above `computeAndDisplayLargest` function, the values `listOfGraphs`, `largestGraph`, and `smallestGraph` would all be considered in the same region - allowing the `SendNonSendable` code to realize that the access  `smallestGraph.decreaseClusterSize(1)` is potentially racy because `smallestGraph`'s region was already transferred to a different isolation.
 
 To summarize, the proposed `SendNonSendable` pass accomplished the goal of allowing non-sendable values to be sent across isolations while maintaining data-race freedom by:
 
@@ -1617,18 +1535,18 @@ Note the emphasis passed on **non-sendable values** - values of sendable type ar
 
 ## Detailed design
 
-This proposal does not add new syntax to Swift, nor change any types. The only change it makes to existing behavior is to prevent the emission of the `non_sendable_call_argument` diagnostic that is emitted when a call that is determined to cross isolation domains has non-sendable arguments. Preempting this diagnostic is what allows non-sendable values to now be passed across isolation domains, such as from a nonisolated context to a main actor isolated context as shown above. 
+This proposal does not add new syntax to Swift, nor change any types. The only change it makes to existing behavior is to prevent the emission of the `non_sendable_call_argument` diagnostic that is emitted when a call that is determined to cross isolation domains has non-sendable arguments. Preempting this diagnostic is what allows non-sendable values to now be passed across isolation domains, such as from a nonisolated context to a main actor isolated context as shown above.
 
-Instead of emitting the `non_sendable_call_argument` diagnostic, the `TypeCheckConcurrency` Sema pass now decorates `ApplyExpr`s with whether they represent an application that crosses isolations. The `SendNonSendable` mandatory SIL pass is then responsible for emitting diagnostics around the subset of isolation-crossing applications that are could yield races, but only that subset. 
+Instead of emitting the `non_sendable_call_argument` diagnostic, the `TypeCheckConcurrency` Sema pass now decorates `ApplyExpr`s with whether they represent an application that crosses isolations. The `SendNonSendable` mandatory SIL pass is then responsible for emitting diagnostics around the subset of isolation-crossing applications that are could yield races, but only that subset.
 
-The key question then becomes: how does the SIL pass determine which isolation-crossing applications could yield races? 
+The key question then becomes: how does the SIL pass determine which isolation-crossing applications could yield races?
 
 ### <a name="regionrules"></a> At a high level: simple rules for regions
 
 All non-sendable values within a function body are tracked to determine what region they reside in. Some simple rules regarding value initialization:
 
 - If the initializer for a non-sendable value takes any non-sendable arguments, then the regions of all its arguments will be merged together so that they all occupy a single, shared region, after the initializer returns. The initialized value will also reside in that region.
--  If the initializer is passed no arguments, or is passed only sendable arguments, then a fresh region shared with no existing values will be created for the initialized value. 
+-  If the initializer is passed no arguments, or is passed only sendable arguments, then a fresh region shared with no existing values will be created for the initialized value.
 
 It is important to keep in mind that these regions are a purely static abstraction, so allocating fresh regions means only choosing a new identifier for that region, not performing a dynamic allocation of any sort. The following code points out region-creation behavior.
 
@@ -1636,7 +1554,7 @@ It is important to keep in mind that these regions are a purely static abstracti
 class NonSendable {
   var x : SendableType
   var y : OtherNonSendableType?
-  
+
   init(_ x : SendableType, _ y : OtherNonSendableType? = none) {
     self.x = x; self.y = y
   }
@@ -1710,17 +1628,17 @@ When a non-sendable value is passed to an actor-entering call, i.e. a call to an
 ```swift
 actor NationalPark {
   var visitors : [Visitor]
-  
+
   func admitVisitor(_ visitor : Visitor) {
     visitors.append(visitor)
   }
-  
+
   func admitAndGreetVisitor(_ visitor : Visitor) {
     // this call does not cross isolations,
     // so it does not transfer `visitor`, it just merges its region
     // with the region of `self`
     admitVisitor(visitor) // callsite 1 - safe
-    
+
     // so access to `visitor` is permitted
     visitor.greet()
   }
@@ -1728,7 +1646,7 @@ actor NationalPark {
 
 func visitParks(_ parks : [NationalPark], _ visitorName : String) async {
   let visitor = Visitor(visitorName)
-  
+
   for park in parks {
     // this call enters the `park` actor, so it
     // transfers `visitor`
@@ -1740,7 +1658,7 @@ func visitParks(_ parks : [NationalPark], _ visitorName : String) async {
 
 Note that the call to `admitVisitor` within the actor method `admitAndGreetVisitor` labelled `callsite 1` does NOT transfer its argument, and continued access after the callsite is permitted. This is because that call is NOT a cross-actor call, so there is no risk of another actor holding a reference to the argument.
 
-On the other hand, the call to `admitVisitor` in the nonisolated function `visitParks` labelled `callsite 2` enters an actor, so it DOES transfer its argument. This makes the written code unsafe, and indeed it yields an error. If the code were allowed, then multiple actors could concurrently reference the same `visitor` object from their storage, racing on it. 
+On the other hand, the call to `admitVisitor` in the nonisolated function `visitParks` labelled `callsite 2` enters an actor, so it DOES transfer its argument. This makes the written code unsafe, and indeed it yields an error. If the code were allowed, then multiple actors could concurrently reference the same `visitor` object from their storage, racing on it.
 
 #### Task creation
 
@@ -1749,7 +1667,7 @@ Special functions that create new tasks, such as `Task.init`, `Task.detached`, o
 ```swift
 func visitParksParallel(_ parks : [NationalPark], _ visitorName : String) {
   let visitor = Visitor(visitorName)
-  
+
   for park in parks {
     Task {
       await park.admitVisitor(visitor) // will error - closure creation transfers `visitor`
@@ -1775,9 +1693,9 @@ The easiest way to generate diagnostics for the `SendNonSendable` pass would be 
 ```swift
 func giveBoxToActor(a : MyActor) async {
   let b = Box()
-  
+
   await a.accessBox(b)
-  
+
   if (b.contents >= 7) { // warning: value of non-sendable type `Box` accessed here, but could've been sent to concurrently executing code above, yielding a potential raace
 		....
 }
@@ -1788,9 +1706,9 @@ Entirely correct semantics for this pass could be implemented with this diagnost
 ```swift
 func giveBoxToActor(a : MyActor) async {
   let b = Box()
-  
+
   await a.accessBox(b) // warning: passing argument of non-sendable type 'Box' from nonisolated context to actor-isolated context at this call site could yield a race with accesses later in this function (1 access site displayed)
-  
+
   if (b.contents >= 7) { // note: access here could race
 		....
 }
@@ -1801,12 +1719,12 @@ If there are multiple sites at which values in the region of the sent value are 
 ```swift
 func compareListElems(a : MyActor) async {
   let myList : [NonSendableElem] = genList()
-  
+
   let elem0 = myList.min(by : {$0 < $1})
   let elem1 = myList.max(by : {$0 < $1})
-  
+
   await a.displayElem(elem0) // warning: passing argument of non-sendable type 'NonSendableElem' from nonisolated context to actor-isolated context at this call site could yield a race with accesses later in this function (2 access sites displayed)
-  
+
   print("min: \(elem0)") // note: access here could race
   print("max: \(elem1)") // note: access here could race
 }
@@ -1826,10 +1744,10 @@ As the diagnostic message indicates, this warning is necessary because function 
 ```swift
 func genAndPassTo(a : MyActor) async {
   let v = NonSendableValue()
-  
+
   // call does NOT transfer v
   await passToActor(a, v)
-  
+
   // access here allowed
   print(v)
 }
@@ -1839,7 +1757,7 @@ To allow the function `passToActor` above to typecheck, a `transferring`-style a
 
 ## Source compatibility
 
-All previously valid, well-typed Swift code will still be valid, well-typed Swift code. 
+All previously valid, well-typed Swift code will still be valid, well-typed Swift code.
 
 ## ABI compatibility
 
@@ -1847,7 +1765,7 @@ No currently planned ABI changes, except as indicated above to potentially chang
 
 ## Implications on adoption
 
-The `SendNonSendable` pass, if adopted, would encourage the development of libraries that pervasively use Swift concurrency, but do not enforce sendability on all types communicated between isolation domains. This is a large expressivity win, but could fundamentally change the way libraries are written, and this have a large impact if the feature were adopted then rolled back. 
+The `SendNonSendable` pass, if adopted, would encourage the development of libraries that pervasively use Swift concurrency, but do not enforce sendability on all types communicated between isolation domains. This is a large expressivity win, but could fundamentally change the way libraries are written, and this have a large impact if the feature were adopted then rolled back.
 
 Additioanlly, API designers will have to expect that, by default, values of types they define can be used in a concurrent context; sending them between isolation domains. If they want to be able to maintain the ability to explicitly declare that values of their types can never cross isolations, an [additional language feature would be required](#sendableunavailability).
 
@@ -1864,10 +1782,10 @@ func passToActorTransferring(a : MyActor, transferring v : NonSendableValue) asy
 
 func genAndPassTransferring(a : MyActor) async {
   let v = NonSendableValue()
-  
+
   // call transfers v
   await passToActorTransferring(a, v)
-  
+
   // access here NOT allowed
   print(v)
 }
@@ -1894,14 +1812,14 @@ Another way that function signatures could be made more expressive is through th
 func generateFreshPerson(_ name : String, _ age : Int, _ ancestryMap : AncestryMap) -> Person {
   let person = Person(name, age)
   if (ancestryMap.containsChild(person)) { ... /* do some logic */ }
-  
+
   return person
 }
 ```
 
 This code basically wraps an initializer with extra logic, and aims to return a non-sendable result to the caller in a fresh region. Unfortunately, the current `SendNonSendable` pass does not allow its result to be used. A useful extension would allow functions with non-sendable results to allow those results to be accessible to cross-isolation callers in the following cases:
 
-- For methods that are not actor methods, the result of isolation-crossing calls to those methods are always available to the caller. 
+- For methods that are not actor methods, the result of isolation-crossing calls to those methods are always available to the caller.
   - By default, results are provided in the same region as `self` and any other arguments (except `transferring` arguments, [see above](#transferringargs))
   - If the `fresh` keyword is placed on the result type in the function signature (e.g. `func generateFreshPerson(...) -> fresh Person`), then the result is provided in a fresh region
 - For actor methods:
@@ -1925,7 +1843,7 @@ actor IndecisiveBox {
     contents = val
     return oldContents
   }
-  
+
   func swapWithOtherBox(_ otherBox : IndecisiveBox) async {
     let otherContents = await otherBox.replaceContents(contents) // warning: call site passes `self` or a non-sendable argument of this function to another thread, potentially yielding a race with the caller
     contents = otherContents
@@ -1933,7 +1851,7 @@ actor IndecisiveBox {
 }
 ```
 
-This could be a perfectly safe pattern, but in the current `SendNonSendable` pass will produce diagnostics as shown above. The issue is that it is not statically known that it is safe to send `contents` to another thread while continuing to access the rest of the actor's storage. To this end, the system could introduce the `iso` keyword. 
+This could be a perfectly safe pattern, but in the current `SendNonSendable` pass will produce diagnostics as shown above. The issue is that it is not statically known that it is safe to send `contents` to another thread while continuing to access the rest of the actor's storage. To this end, the system could introduce the `iso` keyword.
 
 The `iso` keyword, when placed on fields, for example as `iso var contents : NonSendable` above, would indicate that instead of tracking the source and target of the reference (here, `self` and `self.contents`) as necessarily belonging to the same region, they could belong to *different* regions. This allows the above code to typecheck, but comes at the cost of greater complexity to the analysis. For more details see (the PLDI paper)[https://www.cs.cornell.edu/andru/papers/gallifrey-types/].
 
@@ -1954,7 +1872,7 @@ Current `Sendable` checking allows for the following declaration:
 extension T: Sendable { }
 ```
 
-This ensures that `T` will never be `Sendable`, and allows API designers to express a constraint that values of type `T` should never become available in any isolation domain except the one they were created in. With the introduction of the `SendNonSendable` pass, declaring the `Sendable` protocol `unavailable` for a type will still have the effect of preventing it from being made to confom to `Sendable`, and thus preventing values of that type from being sent without using the `SendNonSendable` pass to ensure no aliases of the value linger, but it will not have the effect of ouright preventing values from being sent. 
+This ensures that `T` will never be `Sendable`, and allows API designers to express a constraint that values of type `T` should never become available in any isolation domain except the one they were created in. With the introduction of the `SendNonSendable` pass, declaring the `Sendable` protocol `unavailable` for a type will still have the effect of preventing it from being made to confom to `Sendable`, and thus preventing values of that type from being sent without using the `SendNonSendable` pass to ensure no aliases of the value linger, but it will not have the effect of ouright preventing values from being sent.
 
 It could potentially be useful to still expose a way for developers to ensure values of their defined types are never able to be sent, which would involve a new annotation or protocol such as `~Transferrable` or `~Sendable`. Values of such types would still need to be tracked, as their region labels are necessary to ensure closure under aliasing and references still holds for the regions of non-annotated values, but at the point of a send between isolations, attempting to send any `~Transferable` type would always yield a diagnostic.
 
