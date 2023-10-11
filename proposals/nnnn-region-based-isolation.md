@@ -191,13 +191,17 @@ conservatively cannot prove it is safe.
 
 #### Basic Definitions
 
-An *isolation region* consists of a set of non-`Sendable` values that may alias
-or be reachable from each other. Each isolation region may be associated with a
-specific *isolation domain* that is associated with the isolation provided by a
-specific actor or a task boundary or be non-isolated to a specific isolation
-domain. As the program executes, each isolation region is able to expand and
-merge with other isolation regions as new values begin to be alias or be
-reachable from each other. Each isolation region can only be assigned to a
+An *isolation region* is a set of non-`Sendable` values that must be isolated
+together. Values must be isolated together when they may alias or be reachable
+from each other. An isolation region can be either associated with a specific
+*isolation domain* protected by an actor instance or a global actor, or it can
+be disconnected from any isolation domain. Disconnected isolation regions
+cannot be accessed concurrently, but they can be safely passed across isolation
+boundaries.
+
+As the program executes, each isolation region can be merged with other
+isolation regions as new values begin to be alias or be reachable from each
+other. Each isolation region can only be assigned to a
 single isolation domain at a time since otherwise we would be allowing for races
 to occur since the code in the different isolation domains are allowed to
 execute concurrently. We explore in more detail isolation regions in the
@@ -208,19 +212,19 @@ following section.
 > proposal, the specific isolation regions and isolation domains that values
 > belong to will be notated in comments using bracketed lists. Examples:
 >
-> * `[a]`: A single region that is non-isolated.
+> * `[a]`: A single region that is disconnected.
 >
 > * `[{a, actorInstance}]`: A single region that is isolated to actorInstance.
 >
 > * `[a, {b, actorInstance}]`: Two values in separate isolation regions. a's
->   region is non-isolated but b's region is assigned to the isolation domain of
+>   region is disconnected but b's region is assigned to the isolation domain of
 >   the actor instance actorInstance.
 >
 > * `[{(x, y), @OtherActor}, z, (w, t)]`: Five values in three separate
 >   isolation domains. x and y are within one isolation region that is isolated
 >   to the isolation domain associated with @OtherActor. z is within its own
->   isolation domain and is non-isolated. w and t are within the same region and
->   similar to z are non-isolated.
+>   isolation region and is disconnected. w and t are within the same region and
+>   similar to z are disconnected.
 
 #### Basic Rules
 
@@ -240,10 +244,10 @@ Given a abstract function application y = f(arg<sub>0</sub>, ..., arg<sub>n</sub
    func rule1() async {
      let x1 = NonSendable()
      let x2 = NonSendable()
-     // x1, x2 are non-isolated but in different regions
+     // x1, x2 are disconnected but in different regions
      // Regions: [x1, x2]
      let _  = await asyncFunction(x1, x2)
-     // x1, x2 are in the same region and still non-isolated
+     // x1, x2 are in the same region and still disconnected
      // Regions: [(x1, x2)]
 
      // The same follows if we create an x3 and call a synchronous function.
@@ -525,7 +529,7 @@ dataflow in more detail in an [appendix](#isolation-region-dataflow) to this pro
 ### Transferring Values, Isolation Regions, and Isolation Domains.
 
 As defined above, all non-`Sendable` values in a Swift program belong to some
-*isolation region*. An *isolation region* is either non-isolated or assigned to
+*isolation region*. An *isolation region* is either disconnected or assigned to
 an *isolation domain* that uniquely owns the *isolation region* and which the
 *isolation region* is strongly tied to:
 
@@ -536,14 +540,14 @@ actor Actor {
   var field: NonSendable
 
   func method() {
-    // ns is in a region that is non-isolated to a specific isolation domain.
+    // ns is in a region that is disconnected.
     let ns = NonSendable()
     ...
   }
 }
 
 func nonisolatedFunction() async {
-  // ns is again in a region that is non-isolated to a specific isolation
+  // ns is again in a region that is disconnected
   // domain.
   let ns = NonSendable()
 }
@@ -560,7 +564,7 @@ not belong to its own *isolation domain* since races could result:
 @MainActor func transferToMain<T>(_ t: T) async { ... }
 
 func assigningIsolationDomainsToIsolationRegions() async {
-  // x is assigned to a new isolation region that is non-isolated and thus not assigned
+  // x is assigned to a new isolation region that is disconnected and thus not assigned
   // to a specific isolation domain.
   // Regions: [(x)]
   let x = NonSendable()
@@ -602,11 +606,11 @@ There are three types of isolation regions that a non-`Sendable` value can
 belong to that determine the rules for transferring value over an isolation
 boundary. We discuss them below.
 
-#### Non-Isolated Isolation Regions
+#### Disconnected Isolation Regions
 
-A *non-isolated isolation region* is a region that consists only of
+A *disconnected isolation region* is a region that consists only of
 non-`Sendable` values and is not associated with a specific isolation
-domain. A value in a non-isolated region can be transferred to another
+domain. A value in a disconnected region can be transferred to another
 isolation domain as long as the value is used uniquely by said isolation
 domain and never used later outside of that isolation domain lest we introduce
 races:
@@ -750,8 +754,7 @@ an extension below.
 
 If a function argument isolation region is for a:
 
-* non-isolated function then the region is considered to be non-isolated to a
-  specific isolation domain.
+* `nonisolated` function then the region is considered to be disconnected.
 
 * method with isolated self then the region is considered to be isolated to
   isolated self's isolation domain and in the actor's region. The reason for
@@ -769,8 +772,8 @@ non-`Sendable` values to a function in the same isolation domain as the
 non-`Sendable` values. In such a case, we need to consider how to handle merging
 our specific kinds of isolation regions:
 
-* **Non-Isolated and Non-Isolated**. Given two non-`Sendable` values in separate
-  non-isolated regions, if merge their regions, we get one large non-isolated
+* **Disconnected and Disconnected**. Given two non-`Sendable` values in separate
+  disconnected regions, if merge their regions, we get one large disconnected
   region.
   
   ```swift
@@ -785,9 +788,9 @@ our specific kinds of isolation regions:
   useValue(y)
   ```
 
-* **Non-Isolated and Actor Isolated**. Merging the non-`Sendable` and actor
+* **Disconnected and Actor Isolated**. Merging the non-`Sendable` and actor
   isolation regions results in a new actor isolated region. This forces all
-  values in non-isolated region to be treated as if they are isolated to the
+  values in disconnected region to be treated as if they are isolated to the
   actor. This can only occur when calling a method on an actor or assigning into
   an actor's field:
 
@@ -841,8 +844,8 @@ our specific kinds of isolation regions:
   }
   ```
 
-* **Function Argument and Non-Isolated**. Merging a function argument region and
-  a non-isolated region results in one larger functiona rgument region
+* **Function Argument and Disconnected**. Merging a function argument region and
+  a disconnected region results in one larger functiona rgument region
   containing the union of the two regions:
   
   ```swift
@@ -865,7 +868,7 @@ our specific kinds of isolation regions:
   region works similarly to merging an actor isolated region 
 
 * **Function Argument and Actor Isolated**. A function argument isolation region
-  that is non-isolated can never be merged with an actor isolation region since,
+  that is disconnected can never be merged with an actor isolation region since,
   we would need to transfer the value to merge with the actor's isolation
   region, but function argument regions cannot be transferred. In contrast, if a
   function argument region is on a method, it is part of the actor isolated
@@ -880,14 +883,14 @@ allowed to be passed over isolation boundaries since they may have captured
 state from within the isolation domain in which the closure is defined. We would
 like to loosen these rules. The way that we do this is that:
 
-* A non-isolated non-Sendable closure can be transferred into another isolation
+* A `nonisolated` non-Sendable closure can be transferred into another isolation
   domain if the closure's region is never used again within the closure's
   defining context:
   
   ```swift
   extension MyActor {
     func synchronousNonIsolatedNonSendableClosure() async {
-      // This is non-Sendable and non-isolated since it does not capture MyActor or
+      // This is non-Sendable and nonisolated since it does not capture MyActor or
       // any field of my actor.
       let nonSendable = NonSendable()
       let closure: () -> () = {
@@ -942,10 +945,10 @@ like to loosen these rules. The way that we do this is that:
   actor region with multiple actors, we can still pass it off and invoke it
   since we can dynamically swap to the actor.
 
-### async let and non-isolated functions
+### async let and `nonisolated` functions
 
 Swift supports future like functionality via async let. When a non-`Sendable`
-type is passed to a non-isolated function that is bound to an async let, the
+type is passed to a `nonisolated` function that is bound to an async let, the
 value is temporarily transferred outside of the current isolation domain causing
 the value to be unavailable for use until the async let is awaited upon:
 
@@ -969,12 +972,12 @@ await y
 print(x) // Error! x was already transferred into the main actor!
 ```
 
-### Simplifying non-isolated initializers and deinitializers via transferring
+### Simplifying `nonisolated` initializers and deinitializers via transferring
 
 All of the above discussions involved actors in the context of an isolated self
-parameter. When we have a non-isolated self parameter, we need to behave
+parameter. When we have a `nonisolated` self parameter, we need to behave
 differently. As a reminder when we are within a method where self is
-non-isolated, we cannot touch any isolated state within the actor without
+`nonisolated`, we cannot touch any isolated state within the actor without
 performing an async call into the actor to ensure that we switch onto the
 actor's executor:
 
@@ -997,7 +1000,7 @@ actor Actor {
 }
 ```
 
-We propose to loosen this requirement for non-isolated designated initializers
+We propose to loosen this requirement for `nonisolated` designated initializers
 and deinitializers, situations where the compiler knows that the value has been
 fully caller and callee transferred into the nonisolated function. Since `self`
 in such cases will have been fully transfered by the caller in all cases, we
@@ -1039,10 +1042,10 @@ actor Actor {
 
 In the current proposal, this only will apply to designated initializers, via
 the usage of the `transferring` self, this property can be applied to general
-non-isolated methods. See extensions for more information.
+`nonisolated` methods. See extensions for more information.
 
 // TODO: Why not just have deinit be isolated to actor and prevent
-// transferring. Then doesn't need to be non-isolated. 
+// transferring. Then doesn't need to be `nonisolated`. 
 
 ### Using transferring to pass non-Sendable values to async isolated actor initializers
 
