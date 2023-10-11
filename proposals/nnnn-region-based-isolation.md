@@ -513,15 +513,14 @@ actor Actor {
   var field: NonSendable
 
   func method() {
-    // ns is in a region that is disconnected.
+    // ns is in a disconnected isolation region.
     let ns = NonSendable()
     ...
   }
 }
 
 func nonisolatedFunction() async {
-  // ns is again in a region that is disconnected
-  // domain.
+  // ns is in a disconnected isolation region.
   let ns = NonSendable()
 }
 
@@ -692,55 +691,6 @@ loosened via the usage of the `disconnected` field attribute. A `disconnected`
 field of an actor is a field that is part of a separate isolation region from
 the actor. We discuss this an extension below.
 
-### Function Parameters
-
-A function's non-`Sendable` parameters are considered to be part of the same
-region due to the region merging rules. If a function is a method or a global
-actor isolated function, then the function parameters are considered to be within
-an actor isolated region. If a function is a nonisolated async function then the
-function parameters are part of a disconnected region with the additional
-restriction that the function argument region cannot be transferred. The reason
-why they cannot be transferred is that in such a function, we do not know if an
-isolation boundary was crossed when our caller called the function:
-
-```swift
-// If we were called by isolatedCaller, we would know that x was transferred
-// and could transfer it across another isolation boundary. But if we are called
-// by nonIsolatedCaller, we can't, so since we don't know our caller we must
-// be conservatively correct.
-func nonIsolatedCallee(_ x: NonSendable) async { ... }
-
-func nonIsolatedCaller() async {
-  let x = NonSendable()
-  
-  // No transfer occurs since callee is also nonisolated.
-  await nonIsolatedCallee(x)
-
-  // So x could be used here.
-  useValue(x)
-}
-
-@MainActor func isolatedCaller() async {
-  let x = NonSendable()
-
-  // A transfer occurs here...
-  await nonIsolatedCallee(x)
-
-  // Error! So x cannot be used here.
-  useValue(x)
-}
-```
-
-This restriction follows from this proposal only defining a *transfer*
-convention to a callsite if we know that we are crossing an isolation
-boundary. Thus we must be conservative and treat parameters as being
-non-transferable so we can handle cases where a callee's invocation does not
-result in an isolation boundary being crossed. This restriction can be loosened
-via the introduction of an explicit function argument convention that binds also
-callers called `transferring` that that would cause non-`Sendable` values to be
-transferred even when a callee is not an isolation boundary. We discuss this
-convention as an extension below.
-
 #### Merging Isolation Regions
 
 Our isolation region rules require us to merge regions when passing two
@@ -822,6 +772,105 @@ our specific kinds of isolation regions:
   }
   ```
 
+
+### Function Parameters
+
+A function's non-`Sendable` parameters are considered to be part of the same
+region due to the region merging rules. If a function is a method or a global
+actor isolated function, then the function parameters are considered to be within
+an actor isolated region. If a function is a nonisolated async function then the
+function parameters are part of a disconnected region with the additional
+restriction that the function argument region cannot be transferred. The reason
+why they cannot be transferred is that in such a function, we do not know if an
+isolation boundary was crossed when our caller called the function:
+
+```swift
+// If we were called by isolatedCaller, we would know that x was transferred
+// and could transfer it across another isolation boundary. But if we are called
+// by nonIsolatedCaller, we can't, so since we don't know our caller we must
+// be conservatively correct.
+func nonIsolatedCallee(_ x: NonSendable) async { ... }
+
+func nonIsolatedCaller() async {
+  let x = NonSendable()
+  
+  // No transfer occurs since callee is also nonisolated.
+  await nonIsolatedCallee(x)
+
+  // So x could be used here.
+  useValue(x)
+}
+
+@MainActor func isolatedCaller() async {
+  let x = NonSendable()
+
+  // A transfer occurs here...
+  await nonIsolatedCallee(x)
+
+  // Error! So x cannot be used here.
+  useValue(x)
+}
+```
+
+This restriction follows from this proposal only defining a *transfer*
+convention to a callsite if we know that we are crossing an isolation
+boundary. Thus we must be conservative and treat parameters as being
+non-transferable so we can handle cases where a callee's invocation does not
+result in an isolation boundary being crossed. This restriction can be loosened
+via the introduction of an explicit function argument convention that binds also
+callers called `transferring` that that would cause non-`Sendable` values to be
+transferred even when a callee is not an isolation boundary. We discuss this
+convention as an extension below.
+
+### `nonisolated` functions, disconnected isolation regions, and async let
+
+When we pass a non-`Sendable` value as an argument to a `nonisolated` function,
+the value is only temporarily transferred to the function. This can be seen
+since:
+
+* A parameter to a `nonisolated` function cannot be transferred into a different
+  isolation domain.
+* A `nonisolated` function does not have any non-temporary isolated state of its
+  own that the non-`Sendable` value could escape into.
+
+Despite this temporarility, an actor isolated isolation region can never be
+transferred into a `nonisolated` function since the state of the actor is
+strongly tied to the actor. But this does mean that a disconnected isolation
+region can be used and transferred after the region is transferred to a
+`nonisolated` function.
+
+While said property holds for simple function applications, it is not so simple
+for async let parameters initialized from a nonisolated function. When we pass a
+non-`Sendable` parameter to the nonisolated function, the caller does not know
+if the non isolated function has completed running until the async let is
+awaited upon. Since we cannot allow for the non-`Sendable` value to be used
+concurrently, we must not allow for the value to be used until the async let is
+awaited upon:
+
+```swift
+let x = NonSendable()
+async let y = nonIsolatedFunc(x)
+print(x) // Error! x is used while transferred out of current isolation domain
+await y
+print(x) // Safe since x is no longer being used by nonIsolatedFunc.
+```
+
+In contrast, if the async let function was specifically isolated to an actor,
+then we have transferred away the value into that other isolation domain and can
+no longer use it locally:
+
+```swift
+let x = NonSendable()
+async let y = transferToMainActor(x)
+print(x) // Error! x was already transferred into the main actor!
+await y
+print(x) // Error! x was already transferred into the main actor!
+```
+
+A similar property holds for asynchronous nonisolated coroutines. While the
+coroutine is live, we cannot access any disconnected non-`Sendable` parameters
+passed to the coroutine.
+
 ### non-`Sendable` Closures
 
 Currently non-`Sendable` closures like other non-`Sendable` values are not
@@ -879,14 +928,24 @@ actor Actor {
 
 In contrast, if a closure is nonisolated and only captures non-`Sendable` values
 from a disconnected region, then the resulting region from the closures
-formation is a disconnected isolation region.
+formation is a disconnected isolation region:
 
-#### Nonisolated Closures
+```swift
+extension Actor {
+  let x = NonSendable()
+  // Regions: [(x)]
+  let closure: () -> () = { print(x) }
+  // Regions: [(x, closure)]
+  // ...
+}
+```
+
+#### Transferring Nonisolated Closures
 
 A nonisolated non-`Sendable` synchronous or asynchronous closure can be
 transferred into another isolation domain if the closure's region is never
-used again within the closure's defining context:
-  
+used again locally:
+
 ```swift
 extension MyActor {
   func synchronousNonIsolatedNonSendableClosure() async {
@@ -963,33 +1022,6 @@ extension Actor {
     await transferClosure(closure)
   }
 }  
-```
-
-### async let and `nonisolated` functions
-
-Swift supports future like functionality via async let. When a non-`Sendable`
-type is passed to a `nonisolated` function that is bound to an async let, the
-value is temporarily transferred outside of the current isolation domain causing
-the value to be unavailable for use until the async let is awaited upon:
-
-```swift
-let x = NonSendable()
-async let y = nonIsolatedFunc(x)
-print(x) // Error! x is used while transferred out of current isolation domain
-await y
-print(x) // Safe since x is no longer being used by nonIsolatedFunc.
-```
-
-In contrast, if the async let function was specifically isolated to an actor,
-then we have transferred away the value into that other isolation domain and can
-no longer use it locally:
-
-```swift
-let x = NonSendable()
-async let y = transferToMainActor(x)
-print(x) // Error! x was already transferred into the main actor!
-await y
-print(x) // Error! x was already transferred into the main actor!
 ```
 
 ### Simplifying `nonisolated` initializers and deinitializers via transferring
