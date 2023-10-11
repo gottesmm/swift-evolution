@@ -825,8 +825,12 @@ our specific kinds of isolation regions:
 Currently non-`Sendable` closures like other non-`Sendable` values are not
 allowed to be passed over isolation boundaries since they may have captured
 state from within the isolation domain in which the closure is defined. We would
-like to loosen these rules. First we remember from our region rules above that a
-closure's region is defined by its captures:
+like to loosen these rules.
+
+#### Closure Captures
+
+The rules for regions defined above specify that a closure's region is the merge
+of its non-`Sendable` captured parameters:
 
 ```swift
 let x = NonSendable()
@@ -839,13 +843,13 @@ let closure = { useValues(x, y) }
 
 Since closure captures are actually a form of parameter when the closure is
 invoked, closure parameters like other function parameters are not allowed to be
-transferred within an asynchronous closures body:
+transferred within a closures body:
 
 ```swift
 let x = NonSendable()
 // Regions: [(x)]
 let closure: () async -> () = {
-  // Error! Cannot transfer a captured closure parameter
+  // Error! Cannot transfer a captured closure parameter!
   await transferToMainActor(x)
 }
 ```
@@ -871,86 +875,93 @@ actor Actor {
 }
 ```
 
+In contrast, if a closure is nonisolated and only captures non-`Sendable` values
+from a disconnected region, then the resulting region from the closures
+formation is a disconnected isolation region.
 
-* A nonisolated non-`Sendable` synchronous or asynchronous closure can be
-  transferred into another isolation domain if the closure's region is never
-  used again within the closure's defining context:
+#### Nonisolated Closures
+
+A nonisolated non-`Sendable` synchronous or asynchronous closure can be
+transferred into another isolation domain if the closure's region is never
+used again within the closure's defining context:
   
-  ```swift
-  extension MyActor {
-    func synchronousNonIsolatedNonSendableClosure() async {
-      // This is non-Sendable and nonisolated since it does not capture MyActor or
-      // any field of my actor.
-      let nonSendable = NonSendable()
-      let closure: () -> () = {
-        print("I am in a closure: \(nonSendable.name)")
-      }
-
-      // We can safely transfer closure.
-      await transferClosure(closure)
-
-      // If we were to invoke closure again, an error diagnostic would be
-      // emitted.
-      closure() // Error!
-
-      // If we were to access nonSendable, an error diagnostic would be
-      // emitted.
-      nonSendable.doSomething() // Error!
+```swift
+extension MyActor {
+  func synchronousNonIsolatedNonSendableClosure() async {
+    // This is non-Sendable and nonisolated since it does not capture MyActor or
+    // any field of my actor.
+    let nonSendable = NonSendable()
+    let closure: () -> () = {
+      print("I am in a closure: \(nonSendable.name)")
     }
+
+    // We can safely transfer closure.
+    await transferClosure(closure)
+
+    // If we were to invoke closure again, an error diagnostic would be
+    // emitted.
+    closure() // Error!
+
+    // If we were to access nonSendable, an error diagnostic would be
+    // emitted.
+    nonSendable.doSomething() // Error!
   }
-  ```
-  
-  This follows from said closure being initialized within a disconnected
-  isolation region.
+}
+```
 
-* A synchronous non-`Sendable` closure that is isolated to an actor cannot be
-  transferred to another isolation domain. This is because as part of
-  transferring the closure, we have erased the specific isolation domain that
-  the closure was isolated to, so we cannot guarantee that we will invoke the
-  value in the actor's isolation domain:
-  
-  ```swift
-  extension Actor {
-    func isolatedClosure() async {
-      // This closure is isolated to actor since it captures self.
-      let closure: () -> () = {
-        self.doSomething()
-      }
+This follows from said closure being initialized within a disconnected
+isolation region.
 
-      // When we transfer the closure, we have lost the specific actor that
-      // the closure belongs to so an error must be emitted!
-      await transferClosure(closure) // Error!
+#### Isolated Closures
+
+A synchronous non-`Sendable` closure that is isolated to an actor cannot be
+transferred to another isolation domain. This is because as part of
+transferring the closure, we have erased the specific isolation domain that
+the closure was isolated to, so we cannot guarantee that we will invoke the
+value in the actor's isolation domain:
+
+```swift
+extension Actor {
+  func isolatedClosure() async {
+    // This closure is isolated to actor since it captures self.
+    let closure: () -> () = {
+      self.doSomething()
     }
+
+    // When we transfer the closure, we have lost the specific actor that
+    // the closure belongs to so an error must be emitted!
+    await transferClosure(closure) // Error!
   }
-  ```
-  
-  In the future, we may be able to accept this code in the future if we allowed
-  for isolated synchronous closures to propagate around the specific isolation
-  domain that they belonged to and dynamically swap to it. We discuss *dynamic
-  isolation domains* as an extension below.
+}
+```
 
-* An asynchronous non-Sendable closure that is isolated to an actor can be
-  transferred since upon the closure's invocation, we will always hop into the
-  actor's isolation domain:
-  
-  ```swift
-  extension Actor {
-    func isolatedClosure() async {
-      // This async closure is isolated to actor since it captures self.
-      let closure: () async -> () = {
-        self.doSomething()
-      }
+In the future, we may be able to accept this code in the future if we allowed
+for isolated synchronous closures to propagate around the specific isolation
+domain that they belonged to and dynamically swap to it. We discuss *dynamic
+isolation domains* as an extension below.
 
-      // Since the closure is async, we can transfer it as much as we want
-      // since we will always invoke the closure within the actor's isolation
-      // domain...
-      await transferClosure(closure)
+An asynchronous non-Sendable closure that is isolated to an actor can be
+transferred since upon the closure's invocation, we will always hop into the
+actor's isolation domain:
 
-      // ... so this is safe as well.
-      await transferClosure(closure)
+```swift
+extension Actor {
+  func isolatedClosure() async {
+    // This async closure is isolated to actor since it captures self.
+    let closure: () async -> () = {
+      self.doSomething()
     }
-  }  
-  ```
+
+    // Since the closure is async, we can transfer it as much as we want
+    // since we will always invoke the closure within the actor's isolation
+    // domain...
+    await transferClosure(closure)
+
+    // ... so this is safe as well.
+    await transferClosure(closure)
+  }
+}  
+```
 
 ### async let and `nonisolated` functions
 
