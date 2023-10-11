@@ -796,11 +796,13 @@ our specific kinds of isolation regions:
   ```
 
 * **Actor isolated and Actor isolated**. Due to actor isolation, two actor
-  isolation regions can never join into the same region. This can be seen since
-  to do so we would need to transfer part of one actor isolated value from one
-  actor to another which would be an error. If we attempted to create this
-  condition using conditional control flow and two different actors, we would
-  still get a value that could never be used:
+  isolation regions can never merge into the same region. This can be seen since
+  to do so we would need to either transfer part of one actor isolated value
+  from one actor to another which would be an error or attempt to create this
+  condition using conditional control flow and method calls. As shown in the
+  example below, if one attempts to use conditional control flow to create a
+  region isolated to two different actors, we would still get a value that could
+  never be used:
   
   ```swift
   func test() async {
