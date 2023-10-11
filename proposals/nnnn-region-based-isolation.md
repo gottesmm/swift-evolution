@@ -1027,7 +1027,7 @@ the program. Since `transferring` provides a strong form of isolation for self,
 it now becomes safe to access stored properties of self once more until we
 escape self, breaking our strong isolation created by `transferring`:
 
-```
+```swift
 actor Actor {
   var nonSendableField: NonSendableType
   var mutableSendableField: SendableType
