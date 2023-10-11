@@ -856,9 +856,9 @@ allowed to be passed over isolation boundaries since they may have captured
 state from within the isolation domain in which the closure is defined. We would
 like to loosen these rules. The way that we do this is that:
 
-* A `nonisolated` non-Sendable closure can be transferred into another isolation
-  domain if the closure's region is never used again within the closure's
-  defining context:
+* A nonisolated non-`Sendable` closure can be transferred into another
+  isolation domain if the closure's region is never used again within the
+  closure's defining context:
   
   ```swift
   extension MyActor {
@@ -887,11 +887,12 @@ like to loosen these rules. The way that we do this is that:
   This follows from said closure being initialized within a disconnected
   isolation region.
 
-* A closure that is part of an actor isolation region cannot be transferred to
-  another isolation domain like any other value in an actor isolated
-  region. This is because as part of transferring the closure, we have erased
-  the specific isolation domain that the closure was isolated to, so we cannot
-  guarantee that we will invoke the value in the actor's isolation domain:
+* A non-async non-`Sendable` closure that is isolated to an actor and thus part of an
+  actor isolation region cannot be transferred to another isolation domain like
+  any other value in an actor isolated region. This is because as part of
+  transferring the closure, we have erased the specific isolation domain that
+  the closure was isolated to, so we cannot guarantee that we will invoke the
+  value in the actor's isolation domain:
   
   ```swift
   extension Actor {
