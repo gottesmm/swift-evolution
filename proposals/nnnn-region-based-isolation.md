@@ -542,25 +542,24 @@ actor Actor {
 }
 
 @MainActor func actorRegionExample() async {
-  // Even though a is defined within an @MainActor isolated function,
-  // a is still apart of its own isolation domain.
   let a = Actor()
   // Regions: [{(a.nonSendable), a}]
 
-  // Error! a.nonSendable is within a's region since it is a field of a.
-  // By assigning into x, we are introducing x into a's region meaning that
-  // a's region belongs both to @MainActor's and a's isolation domain implying
-  // a race can occur.
-  let x = await a.nonSendable
+  let x = await a.nonSendable // Error!
 
-  // Error! a.nonSendable is being transferred from a's isolation domain to the main isolation domain.
-  await transferToMainActor(a.nonSendable)
+  await transferToMainActor(a.nonSendable) // Error!
 }
 ```
 
+In the above code example, `x` must be in the actor `a`'s region because it
+aliases actor-isolated state, making `x` effectively isolated to `a`. The
+initialization is invalid, because `x` is not usable from a `@MainActor`
+context. Similarly, attempting to transfer actor-isolated state into another
+isolation domain is invalid.
+
 The objects that make up an actor region varies depending on the kind of actor:
 
-* **Actor**. An actor region for an actor contains the actor's non-sendable
+* **Actor**. An actor region for an actor contains the actor's non-`Sendable`
   fields and any values derived from the actor's fields.
 
   ```swift
@@ -572,21 +571,21 @@ The objects that make up an actor region varies depending on the kind of actor:
     var listHead: NonSendableLinkedList
 
     func method() async {
-      // x is part of self's region since listHead is part of self's region.
+      // Regions: [{(self.listHead, self.listHead.next, ...), self}]
+
       let x = self.listHead
       // Regions: [{(x, self.listHead, self.listHead.next, ...), self}]
 
-      // Since the assignment flows transitively, also y via x is part of self's region.
-      let y = x
-      // Regions: [{(x, y, self.listHead, self.listHead.next, ...), self}]
-
-      // z is part of self's region since transitively next must also be part of self's region.
       let z = self.listHead.next!
-      // Regions: [{(x, y, z, self.listHead, self.listHead.next, ...), self}]
+      // Regions: [{(x, z, self.listHead, self.listHead.next, ...), self}]
       ...
     }
   }
   ```
+
+  In the above example, `x` is in `self`'s region because it aliases
+  non-`Sendable` state isolated to `self`, and `z` is in `self`'s region
+  because the value of `next` is reachable from `self.listHead`.
 
 * **Global Actor**. An actor region for a global actor contains any global
   variables isolated to the global actor, all instances of nominal types
@@ -600,31 +599,31 @@ The objects that make up an actor region varies depending on the kind of actor:
   @GlobalActor func useGlobalActor() async {
     // Regions: [{(firstList, secondList), @GlobalActor}]
 
-    // x is a reference to globalActor's instance so is part of globalActor region.
     let x = firstList
     // Regions: [{(x, firstList, secondList), @GlobalActor}]
 
-    // y references listHead.next! so by composition is part of the actors region.
     let y = secondList.listHead.next!
     // Regions: [{(x, firstList, secondList, y), @GlobalActor}]
     ...
   }
   ```
 
-The restriction that one cannot transfer away any part of an actor region can be
-loosened via the usage of the `disconnected` field attribute. A `disconnected`
-field of an actor is a field that is part of a separate isolation region from
-the actor. We discuss this an extension below.
+  In the above code example `x` is in `@GlobalActor`'s region because it
+  aliases `@GlobalActor`-isolated state, and `y` is in `@GlobalActor`'s region
+  because it aliases a value that's reachable from `@GlobalActor`-isolated
+  state.
+
+An operation to disconnect a value from an actor region in order to transfer
+it to another isolation domain is out of the scope of this proposal. A
+potential extension to enable this is described in the future directions.
 
 #### Merging Isolation Regions
 
-Our isolation region rules require us to merge regions when passing two
-non-`Sendable` values to a function in the same isolation domain as the
-non-`Sendable` values. In such a case, we need to consider how to handle merging
-our specific kinds of isolation regions:
+The behavior of merging two isolation regions depends on the kind of each
+region.
 
 * **Disconnected and Disconnected**. Given two non-`Sendable` values in separate
-  disconnected regions, if merge their regions, we get one large disconnected
+  disconnected regions, merging the regions produces one large disconnected
   region.
 
   ```swift
@@ -633,31 +632,26 @@ our specific kinds of isolation regions:
   // Regions: [(x), (y)]
   useValue(x, y)
   // Regions: [(x, y)]
-  transferToMainActor(x)
-  // Regions: [{(x, y), @MainActor}]
-  // And y is used later, an error is emitted.
-  useValue(y)
   ```
 
-* **Disconnected and Actor Isolated**. Merging the non-`Sendable` and actor
-  isolation regions results in a new actor isolated region. This forces all
-  values in disconnected region to be treated as if they are isolated to the
-  actor. This can only occur when calling a method on an actor or assigning into
-  an actor's field:
+* **Disconnected and Actor Isolated**. Merging a disconnected region and an
+  actor-isolated region expands the actor-isolated region with the values in
+  the disconnected region. This forces all values in the disconnected region
+  to be treated as if they are isolated to the actor. This can only occur when
+  calling a method on an actor or assigning into an actor's field:
 
   ```swift
   func example1() async {
     let x = NonSendable()
-    // Regions: [(x), {(a.field), a}]
-    let a = Actor()
+    // Regions : [(x)]
 
-    // Call into a's isolated state transferring x into a's region.
+    let a = Actor()
+    // Regions: [(x), {(a.field), a}]
+
     await a.useNonSendable(x)
     // Regions: [{(x, a.field), a}]
 
-    // Error! x is now within a's region and a's isolation domain. Thus it can no longer
-    // be used outside of a's isolation domain.
-    useValue(x)
+    useValue(x) // Error! 'x' is effectively isolated to 'a'
 
     let y = NonSendable()
     // Regions: [{(x, a.field), a}, (y)]
@@ -665,37 +659,40 @@ our specific kinds of isolation regions:
     a.field = y
     // Regions: [{(x, a.field, y), a}]
 
-    // Error! Cannot use value outside of a's isolation domain.
-    useValue(y)
+    useValue(y) // Error! 'y' is effectively isolated to 'a'
   }
   ```
 
-* **Actor isolated and Actor isolated**. Due to actor isolation, two actor
-  isolation regions can never merge into the same region. This can be seen since
-  to do so we would need to either transfer part of one actor isolated value
-  from one actor to another which would be an error or attempt to create this
-  condition using conditional control flow and method calls. As shown in the
-  example below, if one attempts to use conditional control flow to create a
-  region isolated to two different actors, we would still get a value that could
-  never be used:
+* **Actor isolated and Actor isolated**. Two actor-isolated regions can never
+  merge into the same region, because it's always valid for code to run on two
+  different actor instances concurrently. If one attempts to use conditional
+  control flow to create a region isolated to two different actors, we would
+  still get a value that could never be used:
 
   ```swift
   func test() async {
     let a1 = Actor()
+    // Regions: [{(), a1}]
     let a2 = Actor()
+    // Regions: [{(), a1}, {(), a2}]
     let x = NonSendable()
-    // Regions: [(x)]
+    // Regions: [{(), a1}, {(), a2}, (x)]
 
     if await boolean {
       await a1.useNS(x)
-      // Regions: [{(x), a1}]
+      // Regions: [{(x), a1}, {(), a2}]
     } else {
       await a2.useNS(x)
-      // Regions: [{(x), a2}]
+      // Regions: [{(), a1}, {(x), a2}]
     }
-    // We can no longer use x since it has been transferred to one of a1 or a2.
+
+    // Regions: [{(x), some Actor}, {(), a1}, {(), a2}]
   }
   ```
+
+  In the above example, `x` cannot be accessed from `test` after the `if`
+  statement. We know that `x` is isolated to some actor instance, and it does
+  not matter which instance it is.
 
 
 ### Function Parameters
