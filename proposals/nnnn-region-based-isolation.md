@@ -191,15 +191,12 @@ conservatively cannot prove it is safe.
 
 #### Definitions
 
-An *isolation region* is a set of non-`Sendable` values that must be isolated
-together. Values must be isolated together when they may alias or be reachable
-from each other. An isolation region can be either associated with a specific
-*isolation domain* protected by an actor instance or a global actor, or it can
-be disconnected from any isolation domain. Disconnected isolation regions
-cannot be accessed concurrently, but they can be safely passed across isolation
-boundaries. As the program executes, each isolation region can be merged with other
-isolation regions as new values begin to be alias or be reachable from each
-other.
+An *isolation region* is a set of non-`Sendable` values that cannot alias or be
+reachable from values not within the set. An isolation region can be either
+associated with a specific *isolation domain* protected by an actor instance or
+a global actor, or it can be disconnected from any specific isolation domain. As
+the program executes, each isolation region can be merged with other isolation
+regions as new values begin to be alias or be reachable from each other.
 
 Isolation regions and isolation domains are not concepts that are explicitly
 denoted in source code. To help explain the concepts throughout this proposal,
