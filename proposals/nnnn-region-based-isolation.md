@@ -417,78 +417,85 @@ optimistic forward dataflow problem that allows us to determine at every point
 of the program the isolation region that a value belongs to. We outline this
 dataflow in more detail in an [appendix](#isolation-region-dataflow) to this proposal.
 
-### Transferring Values, Isolation Regions, and Isolation Domains.
+### Transferring Values and Isolation Regions
 
 As defined above, all non-`Sendable` values in a Swift program belong to some
-*isolation region*. An *isolation region* is either disconnected or assigned to
-an *isolation domain* that uniquely owns the *isolation region* and which the
-*isolation region* is strongly tied to:
+isolation region. An isolation region is either disconnected or isolated to
+an actor's isolation domain:
 
 ```swift
 actor Actor {
-  // Field is part of an isolation region that belongs to an actor instance
-  // isolation domain.
+  // 'field' is in an isolation region that is isolated to the actor instance.
   var field: NonSendable
 
   func method() {
-    // ns is in a disconnected isolation region.
+    // 'ns' is in a disconnected isolation region.
     let ns = NonSendable()
-    ...
   }
 }
 
 func nonisolatedFunction() async {
-  // ns is in a disconnected isolation region.
+  // 'ns' is in a disconnected isolation region.
   let ns = NonSendable()
 }
 
-// globalVariable is in a region belonging to @GlobalActor's isolation domain.
+// 'globalVariable' is in a region that is isolated to @GlobalActor.
 @GlobalActor var globalVariable: NonSendable
 ```
 
-As the program executes, the specific *isolation domain* that owns an *isolation
-region* can vary, but the *isolation region* can never execute in code that does
-not belong to its own *isolation domain* since races could result:
+As the program executes, an isolation region can be passed across isolation
+boundaries, but an isolation region can never be accessed by multiple
+isolation domains at once. When a region $R_{1}$ is merged into another region
+$R_{2}$ that is isolated to an actor, $R_{1}$ becomes protected by
+that isolation domain and cannot be passed or accessed across isolation
+boundaries again.
+
+The following code example demonstrates merging a disconnected region into a
+region that is `@MainActor` isolated:
 
 ```swift
 @MainActor func transferToMainActor<T>(_ t: T) async { ... }
 
 func assigningIsolationDomainsToIsolationRegions() async {
-  // x is assigned to a new isolation region that is disconnected and thus not assigned
-  // to a specific isolation domain.
-  // Regions: [(x)]
+  // Regions: []
+
   let x = NonSendable()
+  // Regions: [(x)]
 
-  // Once y join's x's region, we expand the region, but the region is still
-  // in not isolated to a specific isolation domain.
-  // Regions: [(x, y)]
   let y = x
+  // Regions: [(x, y)]
 
-  // By passing x into transferToMainActor, we are exposing x's region into transferToMainActor.
   await transferToMainActor(x)
-  // Once transferToMainActor has executed, then x and y are in MainActor's region.
   // Regions: [{(x, y), @MainActor}]
 
-  // Error! By using `y` here, we are accessing `y` from outside of `@MainActor`'s
-  // isolation domain meaning that we could race.
-  print(y)
+  print(y) // Error!
 }
 ```
 
-Formally, when we pass a non-`Sendable` value `v` into a function `f` that is of
-a different isolation domain from `v`, then we say that `v` and `v`'s region are
-*transferred* into `f`.
+Passing `x` into `transferToMainActor` introduces a potential alias to `x`
+from any `@MainActor`-isolated state, because the implementation of
+`transferToMainActor` can store `x` into any state within that isolation
+domain. So, the region containing `x` must be merged into the `@MainActor`'s
+region. Accessing `y` after that merge is an error because `x` and `y` are now
+both efectively `@MainActor` isolated, and the access occurs from outside the
+`@MainActor`.
 
-In more general terms, *transferring* a value into a function means that when
-the function executes the only way to reference the value or anything within the
-value's region is via the parameter bound to value inside the function. This is
-a form of deep structural isolation similar to an actor except enforced at a
-single program point. In this proposal, we are defining the default convention
-for passing non-`Sendable` values from one isolation domain to another as being
-a transfer operation. In order to make transferring a convention in other
-contexts, one could implement a general `transferring` function attribute that
-would force these semantics in other cases. We describe this as an extension
-below.
+Formally, when we pass a non-`Sendable` value $v$ into a function $f$ and the
+call to $f$ crosses an isolation boundary, then we say that $v$ and $v$'s
+region are *transferred* into $f$. During the execution of $f$, the only way to
+reference $v$ or any value in the same region as $v$ is through the parameter
+bound to $v$ in the implementation of $f$. This deep structural isolation
+guarantees that values in a region cannot be accessed concurrently.
+
+In this proposal, we are defining the default convention for passing
+non-`Sendable` values into an isolation domain as being a transfer operation.
+In order to use a transfer when passing a non-`Sendable` value into a
+`nonisolated` context, meaning the value would not be accessible after the
+`nonisolated` function call, one could implement a general `transferring`
+parameter modifier that would force those semantics in other cases. The
+transferring semantics are necessary in order for the `Task` initializer to
+accept a non-`Sendable` closure. An explicit `transferring` modifier is
+described in the future directions section.
 
 ### Taxonomy of Isolation Regions
 
