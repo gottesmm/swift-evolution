@@ -697,52 +697,48 @@ region.
 
 ### Function Parameters
 
-A function's non-`Sendable` parameters are considered to be part of the same
-region due to the region merging rules. If a function is a method or a global
-actor isolated function, then the function parameters are considered to be within
-an actor isolated region. If a function is a nonisolated async function then the
-function parameters are part of a disconnected region with the additional
-restriction that the function argument region cannot be transferred. The reason
-why they cannot be transferred is that in such a function, we do not know if an
-isolation boundary was crossed when our caller called the function:
+A function's non-`Sendable` parameters are all part of the same region. If a
+function is an actor instance method or a global-actor isolated, then the
+function parameter region is an actor-isolated region. If a function is a
+nonisolated async function, then the function parameter region is a
+disconnected region with the additional restriction that the function parameter
+region cannot be merged with an actor-isolated region. This enables the caller
+to continue using the transferred arguments after the function returns.
 
 ```swift
-// If we were called by isolatedCaller, we would know that x was transferred
-// and could transfer it across another isolation boundary. But if we are called
-// by nonIsolatedCaller, we can't, so since we don't know our caller we must
-// be conservatively correct.
 func nonIsolatedCallee(_ x: NonSendable) async { ... }
 
 func nonIsolatedCaller() async {
+  // Regions: []
+
   let x = NonSendable()
+  // Regions: [(x)]
 
-  // No transfer occurs since callee is also nonisolated.
   await nonIsolatedCallee(x)
+  // Regions: [(x)]
 
-  // So x could be used here.
-  useValue(x)
+  useValue(x) // It's safe to use 'x' here
 }
 
 @MainActor func isolatedCaller() async {
+  // Regions: [{(), @MainActor}]
+
   let x = NonSendable()
+  // Regions: [{(), @MainActor}, (x)]
 
-  // A transfer occurs here...
   await nonIsolatedCallee(x)
+  // Regions: [{(), @MainActor}, (x)]
 
-  // Error! So x cannot be used here.
-  useValue(x)
+  useValue(x) // Still okay, 'x' has not been merged to an isolated region.
 }
 ```
 
 This restriction follows from this proposal only defining a *transfer*
-convention to a callsite if we know that we are crossing an isolation
-boundary. Thus we must be conservative and treat parameters as being
+convention to a callsite if we know that we are crossing into an actor-isolated
+domain. Thus we must be conservative and treat parameters as being
 non-transferable so we can handle cases where a callee's invocation does not
-result in an isolation boundary being crossed. This restriction can be loosened
-via the introduction of an explicit function argument convention that binds also
-callers called `transferring` that that would cause non-`Sendable` values to be
-transferred even when a callee is not an isolation boundary. We discuss this
-convention as an extension below.
+result in the caller's arguments becoming isolated and inaccessible from the
+caller.
 
 ### `nonisolated` functions, disconnected isolation regions, and async let
 
