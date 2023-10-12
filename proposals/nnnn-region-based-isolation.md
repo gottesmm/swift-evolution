@@ -227,7 +227,7 @@ alias or access path to another value. This can happen through function calls,
 and assignments. Many expression forms are sugar for a function application,
 including property accesses.
 
-Given a function $f$, applied to arguments $a_{i}$, whose result is assigned to
+Given a function $f$ with arguments $a_{i}$ and result that is assigned to
 variable $y$:
 
 $$
@@ -488,12 +488,10 @@ bound to $v$ in the implementation of $f$. This deep structural isolation
 guarantees that values in a region cannot be accessed concurrently.
 
 In this proposal, we are defining the default convention for passing
-non-`Sendable` values into actor isolated isolation domains as being a transfer
-operation. In contrast, non-`Sendable` values passed into a `nonisolated`
-context are not transferred. In order to transfer a non-`Sendable` value into a
-`nonisolated` context, one could implement a general `transferring` parameter
-modifier that would force transferring semantics. An explicit `transferring`
-modifier is described in the future directions section.
+non-`Sendable` values across isolation boundaries as being a transfer
+operation. This does not apply when calling async functions from within the same
+isolation domain. To do so, one needs to use an explicit `transferring`
+modifier. We describe `transferring` in the future directions section.
 
 ### Taxonomy of Isolation Regions
 
@@ -626,6 +624,7 @@ region.
 
   ```swift
   let x = NonSendable()
+  // Regions: [(x)]
   let y = NonSendable()
   // Regions: [(x), (y)]
   useValue(x, y)
