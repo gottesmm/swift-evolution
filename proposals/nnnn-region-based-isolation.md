@@ -203,19 +203,19 @@ denoted in source code. To help explain the concepts throughout this proposal,
 isolation regions and their isolation domains will be written in comments in
 the following notation:
 
-> * `[a]`: A single disconnected region with a single value.
->
-> * `[{a, actorInstance}]`: A single region that is isolated to actorInstance.
->
-> * `[a, {b, actorInstance}]`: Two values in separate isolation regions. a's
->   region is disconnected but b's region is assigned to the isolation domain of
->   the actor instance actorInstance.
->
-> * `[{(x, y), @OtherActor}, z, (w, t)]`: Five values in three separate
->   isolation regions. `x` and `y` are within one isolation region that is
->   isolated to the global actor `@OtherActor`. `z` is within its own
->   disconnected isolation region. `w` and `t` are within the same disconnected
->   region.
+* `[a]`: A single disconnected region with a single value.
+
+* `[{a, actorInstance}]`: A single region that is isolated to actorInstance.
+
+* `[a, {b, actorInstance}]`: Two values in separate isolation regions. a's
+  region is disconnected but b's region is assigned to the isolation domain of
+  the actor instance actorInstance.
+
+* `[{(x, y), @OtherActor}, z, (w, t)]`: Five values in three separate
+  isolation regions. `x` and `y` are within one isolation region that is
+  isolated to the global actor `@OtherActor`. `z` is within its own
+  disconnected isolation region. `w` and `t` are within the same disconnected
+  region.
 
 #### Rules for Merging Isolation Regions
 
