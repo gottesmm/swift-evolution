@@ -488,14 +488,12 @@ bound to $v$ in the implementation of $f$. This deep structural isolation
 guarantees that values in a region cannot be accessed concurrently.
 
 In this proposal, we are defining the default convention for passing
-non-`Sendable` values into an isolation domain as being a transfer operation.
-In order to use a transfer when passing a non-`Sendable` value into a
-`nonisolated` context, meaning the value would not be accessible after the
-`nonisolated` function call, one could implement a general `transferring`
-parameter modifier that would force those semantics in other cases. The
-transferring semantics are necessary in order for the `Task` initializer to
-accept a non-`Sendable` closure. An explicit `transferring` modifier is
-described in the future directions section.
+non-`Sendable` values into actor isolated isolation domains as being a transfer
+operation. In contrast, non-`Sendable` values passed into a `nonisolated`
+context are not transferred. In order to transfer a non-`Sendable` value into a
+`nonisolated` context, one could implement a general `transferring` parameter
+modifier that would force transferring semantics. An explicit `transferring`
+modifier is described in the future directions section.
 
 ### Taxonomy of Isolation Regions
 
@@ -698,12 +696,12 @@ region.
 ### Function Parameters
 
 A function's non-`Sendable` parameters are all part of the same region. If a
-function is an actor instance method or a global-actor isolated, then the
-function parameter region is an actor-isolated region. If a function is a
-nonisolated async function, then the function parameter region is a
-disconnected region with the additional restriction that the function parameter
-region cannot be merged with an actor-isolated region. This enables the caller
-to continue using the transferred arguments after the function returns.
+function is an actor instance method or global-actor isolated, then the function
+parameter region is an actor-isolated region. If a function is a nonisolated
+async function, then the function parameter region is a disconnected region with
+the additional restriction that the function parameter region cannot be merged
+with an actor-isolated region. This enables the caller to continue using the
+transferred arguments after the function returns.
 
 ```swift
 func nonIsolatedCallee(_ x: NonSendable) async { ... }
@@ -751,7 +749,7 @@ since:
 * A `nonisolated` function does not have any non-temporary isolated state of its
   own that the non-`Sendable` value could escape into.
 
-Despite this temporarility, an actor isolated isolation region can never be
+Despite this temporariness, an actor isolated isolation region can never be
 transferred into a `nonisolated` function since the state of the actor is
 strongly tied to the actor. But this does mean that a disconnected isolation
 region can be used and transferred after the region is transferred to a
