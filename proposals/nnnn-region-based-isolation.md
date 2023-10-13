@@ -11,179 +11,134 @@
 ## Introduction
 
 Swift Concurrency assigns values to *isolation domains* determined by actor and
-task boundaries. Code running in distinct isolation domains are allowed to
-execute concurrently. As a result, SE-0302: Sendable and @Sendable closures
-defines away data races by forbiding non-`Sendable` values from being passed over
-*isolation boundaries*. In practice this turns out to be a very significant semantic
-restriction. In this document, we propose loosening these rules by introducing a
+task boundaries. Code running in distinct isolation domains can execute
+concurrently, and `Sendable` checking defines away concurrent access to
+shared mutable state by preventing non-`Sendable` values from being passed
+across isolation boundaries full stop. In practice, this is a significant
+semantic restriction, because it forbids natural programming patterns that are
+free of data races.
+
+In this document, we propose loosening these rules by introducing a
 new control flow sensitive diagnostic that determines whether a non-`Sendable`
 value can safely be transferred over an isolation boundary. This is done by
 introducing the concept of *isolation regions* that allows the compiler to
 reason conservatively if two values can affect each other. Through the usage of
-isolation regions, the language is able to prove that transferring a
-non-`Sendable` value over an isolation boundary can not result in races by
-validating that once the value has been transferred there are no later uses of
-the value or other values that could affect the transferred value.
+isolation regions, the language can prove that transferring a non-`Sendable`
+value over an isolation boundary cannot result in races because the value (and
+any other value that might reference it) is not used in the caller after the
+point of transfer.
 
 ## Motivation
 
-SE-0302 states that non-`Sendable` values cannot be sent across *isolation
-boundaries*. Thus given the following code that opens a new `ClientAccount` for
-a `Client` at a bank, we get an error in `openNewAccount` when strict
-concurrency is enabled since `Client` is not `Sendable` despite us having just
-constructed the value:
+[SE-0302](proposals/0302-concurrent-value-and-concurrent-closures.md) states
+that non-`Sendable` values cannot be passed across isolation boundaries. The
+following code demonstrates a `Sendable` violation when passing a
+newly-constructed value into an actor-isolated function:
 
 ```swift
-struct BankAccount {
-   /// The amount of funds available in this bank account.
-   var amount: Double
-
-   /* ... */
-}
-
 // Not Sendable
 class Client {
-    var name: String
-    var account: BankAccount
-
-    init(name: String, initialBalance: Double) {
-        self.name = name
-        self.account = BankAccount(amount: initialBalance)
-    }
+  init(name: String, initialBalance: Double) { ... }
 }
 
 actor ClientStore {
-    var clients: [Client] = []
+  var clients: [Client] = []
 
-    static let clientStore = ClientStore()
+  static let shared = ClientStore()
 
-    func addClient(_ c: Client) {
-        clients.append(c)
-    }
+  func addClient(_ c: Client) {
+    clients.append(c)
+  }
 }
 
 func openNewAccount(name: String, initialBalance: Double) async {
-    let client = Client(name: name, initialBalance: initialBalance)
-    await ClientStore.clientStore.addClient(client) // Error! 'Client' is non-sendable! This could race!
+  let client = Client(name: name, initialBalance: initialBalance)
+  await ClientStore.shared.addClient(client) // Error! 'Client' is non-`Sendable`!
 }
 ```
 
-This is overly conservative since there cannot be any races in this code due to:
+This is overly conservative; the program is safe because:
 
-* `client` just being constructed implying `client` cannot have any uses outside of
-   `openNewAccount`.
-* `client` not having any other local uses within `openNewAccount` beyond
-  `addClient`.
+* `client` just being constructed implies that `client` cannot have any uses
+  outside of `openNewAccount`.
+* `client` is not used within `openNewAccount` beyond `addClient`.
 
 The simple example above shows the expressivity limitations of Swift's strict
-concurrency checking. The example requires unsafe escape hatches, such as
-`@unchecked Sendable` conformances, for common patterns that are already free of
-data races.
+concurrency checking. Programmers are required to use unsafe escape hatches,
+such as `@unchecked Sendable` conformances, for common patterns that are already
+free of data races.
 
 ## Proposed solution
 
 We propose the introduction of a new control flow sensitive diagnostic that
-emits errors at use sites of non-`Sendable` values that previously were
-transferred to a different isolation domain. Our motivating example does not
-violate this rule since `client` is passed into a initializer and does not have
-any further uses. But if we were to modify `openNewAccount` to call a function
-on `client`, we would violate this rule since a value that had already been
-transferred from a non-isolated context to an actor-isolated context would be
-reused:
+enables transferring non-`Sendable` values across isolation boundaries, and
+emits errors at use sites of non-`Sendable` values that have already been
+transferred to a different isolation domain.
+
+This change makes the motivating example valid code, because the `client`
+variable does not have any further uses after it's transferred to the
+`ClientStore.shared` actor through the call to  `addClient`. If we were to
+modify `openNewAccount` to call a method on `client` after the call to
+`addClient`, the code would be invalid since a value that had already been
+transferred from a non-isolated context to an actor-isolated context could be
+accessed concurrently:
 
 ```swift
 func openNewAccount(name: String, initialBalance: Double) async {
-    let client = Client(name: name, initialBalance: initialBalance)
-    await ClientStore.clientStore.addClient(client)
-    client.logToAuditStream() // Error! Already transferred into clientStore's isolation domain... this could race!
+  let client = Client(name: name, initialBalance: initialBalance)
+  await ClientStore.shared.addClient(client)
+  client.logToAuditStream() // Error! Already transferred into clientStore's isolation domain... this could race!
 }
 ```
 
-Even though it is unsafe to use `client` in `openNewAccount` after transferring
-`client` into `clientStore`'s isolation domain, any other value that could
-statically be proven as being isolated from `client` could be used safely. To
-prove isolation here, we reason about equivalence classes of values called
-isolation regions. Formally, two values `x` and `y` are defined to be within
-the same isolation region at a program point `p` if:
+After the call to `addClient`, any other value that is statically proven to be
+impossible to reference from `client` can still be used safely. We can prove
+this property using the concept of *isolation regions*. An isolation region
+is a set of values that can only ever be referenced through other values within
+that set. Formally, two values $x$ and $y$ are defined to be within the same
+isolation region at a program point $p$ if:
 
-1. `x` may alias `y` at `p`.
-2. `x` or a part of `x` might be referenceable from `y` via chained access of `y`'s properties at `p`.
+1. $x$ may alias $y$ at $p$.
+2. $x$ or a property of $x$ might be referenceable from $y$ via chained access of $y$'s properties at $p$.
 
-This definition ensures that values that are in different isolation regions
-can be used concurrently since any code that uses `x` could not affect `y`. For
-example, if we had two bank accounts one for John and the other for Joanna and
-wanted to execute a series of transactions on each account:
+This definition ensures that values in different isolation regions can be used
+concurrently, because any code that uses $x$ cannot affect $y$.
+
+For example:
 
 ```swift
-// TODO(MG): IMPROVE THIS EXAMPLE! Intent is for two newly constructed values
-// passed from the global isolation domain into another isolation domain. Since
-// they are different values they can't race and are safe.
+let john = Client(name: "John", initialBalance: 0)
+let joanna = Client(name: "Joanna", initialBalance: 0)
 
-// Non sendable
-struct Transaction { ... }
-extension ClientAccount {
-    static func lookup(name: String) -> Client { ... }
-}
-
-var johnsTransaction = Transaction()
-johnsTransaction.add(withdrawing: 50.0)
-johnsTransaction.add(depositing: 100.0)
-
-var joannasTransaction = Transaction()
-johnsTransaction.add(depositing: 150.0)
-johnsTransaction.add(withdrawing: 50.0)
-
-await johnsAccount.account.apply(johnsTransaction)
-await joannasAccount.account.apply(joannasTransaction) // (1)
+await ClientStore.shared.addClient(john)
+await ClientStore.shared.addClient(joanna) // (1)
 ```
 
-since we just constructed `johnsTransaction` and `joannasTransaction` we know
-that they must be isolated from each other and thus be apart of different
-regions. This means that we do not need to worry about any races in between
-`joannasTransaction` and `johnsTransaction` since they are isolated from each
-other. Thus the use of `joannasTransaction` at `(1)` must be safe and the
-diagnostic must not emit an error.
+The above code creates two new `Client` instances. It's impossible for
+`john` to reference `joanna` and vice versa, so these two values belong to
+different isolation regions. Values in different isolation regions can be
+used concurrently, so the use of `joanna` at `(1)`, which may be executing
+concurrently with some code inside `ClientStore.shared` that accesses `john`,
+is safe from data races.
 
-In contrast, if we wanted to implement an auditing routine on `ClientAccount`
-that audited two random bank accounts of a client:
+In contrast, if we add a `friend` property to `Client` and assign `joanna` to
+`john.friend`:
 
 ```swift
-// TODO(MG): IMPROVE THIS EXAMPLE! Intent is to have two values that could alias
-// and thus are part of the same region, triggering the error.
+let john = Client(name: "John", initialBalance: 0)
+let joanna = Client(name: "Joanna", initialBalance: 0)
 
-class Client { ... }
-class BankAccount {
-  var amount: Double = 0.0
-}
+john.friend = joanna // (1)
 
-actor ClientAccount {
-  var client: Client
-  var accounts: [BankAccount] = [BankAccount()]
-  var randomAccount: BankAccount { ... }
-  init(_ client: Client, _ initialBalance: Double) { ... }
-}
-
-actor AccountAuditing {
-  func prepareAudit(_ x: BankAccount) { ... }
-  static var auditor: AccountAuditing
-}
-
-extension ClientAccount {
-  func transferAccountForAuditing() async {
-    let firstRandomAccount = self.accounts.randomAccount
-    let secondRandomAccount = self.accounts.randomAccount
-    let auditor = AccountAuditing.auditor
-    await auditor.prepareAudit(firstRandomAccount)
-    await auditor.prepareAudit(secondRandomAccount) // Error! Race!
-  }
-}
+await ClientStore.shared.addClient(john)
+await ClientStore.shared.addClient(joanna) // (2)
 ```
 
-then at `(1)`, we would consider `firstRandomAccount` and `secondRandomAccount`
-to be part of the same region since we do not know if they alias and thus cannot
-prove they are isolated from one another. As such, attempting to transfer either
-across an isolation boundary would be flagged as a race by the diagnostic since we
-conservatively cannot prove it is safe.
+After the assignment at point `(1)`, `joanna` can be referenced through
+`john.friend`, so `john` and `joanna` must be in the same isolation region at
+`(1)`. The access to `joanna` at point `(2)` can be executing concurrently with
+code inside `ClientStore.shared` that accesses `john.friend`. Using `joanna` at
+point `(2)` is diagnosed as a potential data race.
 
 ## Detailed Design
 
