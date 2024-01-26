@@ -1079,6 +1079,45 @@ extension Actor {
 }
 ```
 
+When a non-Sendable value is captured by an isolated closure, we treat the value
+as being transferred into the closure's isolation domain since the value is now
+able to merged into actor isolated state:
+
+```swift
+@MainActor var nonSendableGlobal = NonSendable()
+
+func captureIsolationExample() {
+  let x = NonSendable()
+  let f = { @MainActor in
+    nonSendableGlobal = x // Error! x is transferred into @MainActor and then accessed later.
+  }
+  useValue(x) // Access is here
+}
+```
+
+Importantly this ensures that APIs like `assumeIsolated` that take an isolated
+closure argument cannot introduce races by transferring function parameters of
+nonisolated functions into an isolated closure.
+
+```swift
+@MainActor
+final class ContainsNonSendable {
+  var ns: NonSendableType = .init()
+
+  nonisolated func unsafeSet(_ ns: NonSendableType) {
+    self.assumeIsolated { isolatedSelf in
+      isolatedSelf.ns = ns // Error! Cannot transfer a parameter!
+    }
+  }
+}
+
+func assumeIsolatedError(actor: ContainsNonSendable) async {
+  let x = NonSendableType()
+  actor1.unsafeSet(x)
+  useValue(x) // Race is here
+}
+```
+
 ### Async Let
 
 When an async let binding is initialized with an expression that uses a
